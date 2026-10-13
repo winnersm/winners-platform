@@ -10,11 +10,18 @@ export async function GET(req: NextRequest) {
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const op = await getActiveOperationId();
   const datePreset = req.nextUrl.searchParams.get("datePreset") ?? "last_7d";
+  // view=active (defecto): solo cuentas vivas en el BM → dashboard limpio.
+  // view=removed: solo cuentas archivadas (salieron del BM) → historial.
+  const view = req.nextUrl.searchParams.get("view") ?? "active";
   if (!op) return NextResponse.json({ accounts: [], synced: false, syncedAt: null });
 
   const rows = await prisma.accountInsightSnapshot.findMany({
-    where: { operationId: op, datePreset },
-    orderBy: { spend: "desc" },
+    where: {
+      operationId: op,
+      datePreset,
+      ...(view === "removed" ? { removedFromBmAt: { not: null } } : { removedFromBmAt: null }),
+    },
+    orderBy: view === "removed" ? { removedFromBmAt: "desc" } : { spend: "desc" },
   });
 
   const accounts = rows.map((r) => ({
@@ -23,6 +30,8 @@ export async function GET(req: NextRequest) {
     bmId: r.bmId ?? "",
     account_status: r.accountStatus,
     insights: r.data ?? null,
+    removedFromBmAt: r.removedFromBmAt,
+    lastSeenInBmAt: r.lastSeenInBmAt,
   }));
 
   const syncedAt = rows.reduce<Date | null>(

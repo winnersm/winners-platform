@@ -11,13 +11,18 @@ export const DASHBOARD_PRESETS = ["today", "last_7d", "last_30d"];
 export async function syncDashboardForOperation(
   operationId: string,
   presets: string[] = DASHBOARD_PRESETS,
-): Promise<{ accounts: number; snapshots: number }> {
+): Promise<{ accounts: number; snapshots: number; archived: number }> {
   let accounts;
   try {
     accounts = await getAdAccounts(undefined, operationId);
   } catch {
-    return { accounts: 0, snapshots: 0 };
+    return { accounts: 0, snapshots: 0, archived: 0 };
   }
+
+  // Membresía viva del BM: todos los accountId que el BM devuelve ahora (de
+  // cualquier estado). Es la fuente de verdad para saber qué cuentas siguen.
+  const currentIds = new Set(accounts.map((a) => a.id.replace("act_", "")));
+  const now = new Date();
   const active = accounts.filter((a) => a.account_status === 1);
   let snaps = 0;
 
@@ -37,20 +42,45 @@ export async function syncDashboardForOperation(
           accountName: a.name, accountStatus: a.account_status, bmId: a.bmId,
           data: insights ? (insights as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
           spend: parseFloat(insights?.spend ?? "0"),
-          syncedAt: new Date(),
+          syncedAt: now, lastSeenInBmAt: now, removedFromBmAt: null,
         },
         update: {
           accountName: a.name, accountStatus: a.account_status, bmId: a.bmId,
           data: insights ? (insights as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
           spend: parseFloat(insights?.spend ?? "0"),
-          syncedAt: new Date(),
+          syncedAt: now, lastSeenInBmAt: now, removedFromBmAt: null,
         },
       });
       snaps++;
       await new Promise((r) => setTimeout(r, 250)); // pacing para no saturar la cuenta
     }
   }
-  return { accounts: active.length, snapshots: snaps };
+
+  // Cuentas que SIGUEN en el BM pero no están activas (pausadas/cerradas): no se
+  // les piden insights, pero sí refrescamos su estado y su membresía para que no
+  // queden congeladas como activas ni se archiven por error.
+  for (const a of accounts) {
+    if (a.account_status === 1) continue;
+    const rawId = a.id.replace("act_", "");
+    await prisma.accountInsightSnapshot.updateMany({
+      where: { operationId, accountId: rawId },
+      data: { accountStatus: a.account_status, lastSeenInBmAt: now, removedFromBmAt: null },
+    });
+  }
+
+  // Archivar (NUNCA borrar) las cuentas que ya no aparecen en el BM. Se marca la
+  // fecha de salida una sola vez; las ya archivadas se dejan intactas. El guardia
+  // evita archivar todo si el BM respondiera con lista vacía por un fallo.
+  let archived = 0;
+  if (currentIds.size > 0) {
+    const res = await prisma.accountInsightSnapshot.updateMany({
+      where: { operationId, accountId: { notIn: [...currentIds] }, removedFromBmAt: null },
+      data: { removedFromBmAt: now },
+    });
+    archived = res.count;
+  }
+
+  return { accounts: active.length, snapshots: snaps, archived };
 }
 
 // Sincroniza TODAS las operaciones (lo llama el job en segundo plano).
@@ -59,7 +89,7 @@ export async function syncAllDashboards(): Promise<void> {
   for (const op of ops) {
     try {
       const r = await syncDashboardForOperation(op.id);
-      console.log(`[dashboard-sync] ${op.name}: ${r.accounts} cuentas, ${r.snapshots} snapshots`);
+      console.log(`[dashboard-sync] ${op.name}: ${r.accounts} cuentas, ${r.snapshots} snapshots, ${r.archived} archivadas`);
     } catch (e) {
       console.error(`[dashboard-sync] ${op.name} falló:`, e);
     }

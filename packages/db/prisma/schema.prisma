@@ -364,8 +364,16 @@ model AccountInsightSnapshot {
   spend         Float    @default(0)
   syncedAt      DateTime @default(now())
 
+  // Membresía en el BM. Una cuenta que sale del BM se ARCHIVA (no se borra):
+  // removedFromBmAt pasa de null a la fecha en que dejó de aparecer, y la fila
+  // conserva su última foto para consulta histórica. Si la cuenta vuelve al BM,
+  // removedFromBmAt se limpia de nuevo a null.
+  lastSeenInBmAt  DateTime?
+  removedFromBmAt DateTime?
+
   @@unique([accountId, operationId, datePreset])
   @@index([operationId, datePreset])
+  @@index([operationId, removedFromBmAt])
   @@schema("meta")
 }
 
