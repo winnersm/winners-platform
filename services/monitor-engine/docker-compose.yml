@@ -1,0 +1,41 @@
+services:
+  # --- Monitor (aislado, sin entrada web): chequea links cada 30 min ---
+  link-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: link-monitor
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro   # el monitor solo lee
+    environment:
+      - TZ=America/Mexico_City
+
+  # --- Panel web de administración (expuesto vía Traefik) ---
+  link-monitor-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: link-monitor-web
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data                     # lee state.json / incidents (mismo volumen)
+      - ./config.yaml:/app/config.yaml       # rw: el panel edita los links
+    environment:
+      - TZ=America/Mexico_City
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ffmonitorlinks.rule=Host(`ffmonitorlinks.mastermindwinners.com`)"
+      - "traefik.http.routers.ffmonitorlinks.entrypoints=websecure"
+      - "traefik.http.routers.ffmonitorlinks.tls=true"
+      - "traefik.http.services.ffmonitorlinks.loadbalancer.server.port=8000"
+
+networks:
+  proxy:
+    external: true

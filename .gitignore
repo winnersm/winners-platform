@@ -1,0 +1,36 @@
+# dependencias
+node_modules/
+.pnpm-store/
+
+# builds
+.next/
+dist/
+out/
+build/
+*.tsbuildinfo
+.turbo/
+
+# secretos — NUNCA versionar
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# prisma
+packages/db/generated/
+
+# sistema
+.DS_Store
+*.log
+
+# scripts con credenciales de prueba
+packages/db/scripts/seed-test-users.mjs
+apps/redirector/.env
+
+# scripts con contraseñas reales del equipo
+packages/db/scripts/verificar-passwords.mjs
+
+# preferencias personales del editor
+.vscode/

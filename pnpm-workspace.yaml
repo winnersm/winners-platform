@@ -1,0 +1,23 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+allowBuilds:
+  esbuild: set this to true or false
+  msgpackr-extract: set this to true or false
+  prisma: set this to true or false
+  sharp: set this to true or false
+  unrs-resolver: set this to true or false
+
+# pnpm 11 bloquea los scripts de instalación por defecto (evita que una
+# dependencia ejecute código al instalarse). Estos sí los necesitan:
+# Prisma descarga sus motores, y esbuild/sharp/unrs-resolver compilan
+# binarios nativos que Next.js usa para construir y optimizar imágenes.
+onlyBuiltDependencies:
+  - "@prisma/client"
+  - "@prisma/engines"
+  - "prisma"
+  - "esbuild"
+  - "sharp"
+  - "unrs-resolver"
+  - "msgpackr-extract"

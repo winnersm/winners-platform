@@ -1,0 +1,783 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Winners Platform — esquema unificado
+//
+// Una sola base Postgres, un schema por dominio. Prisma lo soporta nativamente
+// con multiSchema: da aislamiento lógico y migraciones independientes, pero
+// permite hacer JOIN entre módulos (que es justo lo que hoy no se puede porque
+// están en bases separadas).
+//
+//   core         identidad, permisos, auditoría, secretos
+//   meta         Meta Ads            (viene de newappmeta)
+//   links        acortador           (viene de acortador)
+//   automations  jobs programados    (viene de automations-hub)
+//   monitor      salud de links      (viene de link-monitor, hoy en ficheros JSON)
+//   cloner       clonado entre cuentas (viene de opwinners, hoy en SQLite local)
+//
+// `reports` queda RESERVADO para una futura absorción de dash. No se crea aún.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// La URL de conexión vive en prisma.config.ts (Prisma 7 ya no la acepta aquí),
+// igual que en newappmeta y acortador.
+datasource db {
+  provider = "postgresql"
+  schemas  = ["core", "meta", "links", "automations", "monitor", "cloner"]
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CORE — quién es quién. La única fuente de verdad de identidad.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum Role {
+  OWNER // todo, incluido usuarios, secretos y facturación
+  ADMIN // todo lo operativo + configuración. No toca usuarios ni secretos
+  OPERATOR // trabajo diario en los módulos concedidos
+  VIEWER // solo lectura
+  SERVICE // cuentas de servicio (workers). Sin login web
+
+  @@schema("core")
+}
+
+enum Module {
+  META
+  AUTOMATIONS
+  LINKS
+  MONITOR
+  CLONER
+  ADMIN
+
+  @@schema("core")
+}
+
+enum GrantLevel {
+  NONE
+  READ
+  WRITE
+  ADMIN
+
+  @@schema("core")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED // conserva el histórico pero no puede entrar
+
+  @@schema("core")
+}
+
+/// Tenant. Todo dato con negocio o token pertenece a una operación.
+model Operation {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  memberships Membership[]
+
+  @@schema("core")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  name         String?
+  role         Role       @default(OPERATOR)
+  status       UserStatus @default(ACTIVE)
+
+  /// Fuerza cambio de contraseña en el próximo login. Se usa en el cutover:
+  /// todo el mundo estrena contraseña al migrar desde las apps antiguas.
+  mustChangePassword Boolean @default(false)
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  memberships Membership[]
+  grants      ModuleGrant[]
+  auditLogs   AuditLog[]
+
+  @@index([status])
+  @@schema("core")
+}
+
+/// A qué operaciones pertenece cada persona. Sustituye al array `operations[]`
+/// de newappmeta: como tabla se puede consultar al revés (¿quién ve esta cuenta?).
+model Membership {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  operationId String
+  operation   Operation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([userId, operationId])
+  @@index([operationId])
+  @@schema("core")
+}
+
+/// Qué puede hacer cada persona en cada módulo. Sustituye a `sections[]`.
+/// Ausencia de fila = sin acceso (el módulo ni siquiera aparece en el menú).
+model ModuleGrant {
+  id     String     @id @default(cuid())
+  userId String
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module Module
+  level  GrantLevel @default(READ)
+
+  /// Granularidad dentro del módulo. Vacío = todas las secciones.
+  ///
+  /// Existe porque newappmeta ya distinguía por sección (hay un dev externo con
+  /// acceso solo a Fanpages). Sin esto, la migración le habría dado acceso a
+  /// todo Meta Ads — una consolidación no puede aflojar permisos que ya existían.
+  scopes String[] @default([])
+
+  @@unique([userId, module])
+  @@schema("core")
+}
+
+/// Toda acción con efecto queda registrada. Hoy solo newappmeta audita; el
+/// objetivo es poder responder "¿quién pausó esa campaña?" en cualquier módulo.
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  module     Module
+  action     String // "campaign.pause", "link.create", "user.suspend"
+  entityType String?
+  entityId   String?
+  /// Antes/después del cambio, para poder reconstruir qué pasó
+  payload    Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([module, createdAt])
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@schema("core")
+}
+
+/// Secretos cifrados con AES-256-GCM y UNA sola clave maestra (env MASTER_KEY).
+/// Reemplaza la tabla `config` de automations-hub, donde los tokens de Meta y
+/// las API keys de afiliados estaban en texto plano marcados con is_secret.
+model Secret {
+  id          String   @id @default(cuid())
+  key         String   @unique // "fb_token_primary", "slack_webhook_billing"
+  label       String
+  section     String // "meta", "affiliates", "slack", "google"
+  ciphertext  String
+  /// Últimos 4 caracteres del valor, para poder identificarlo en la UI sin descifrarlo
+  hint        String?
+  operationId String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([section])
+  @@schema("core")
+}
+
+/// Configuración NO secreta. Sustituye a las filas no-secretas de `config`
+/// y a AppConfig de newappmeta.
+model Setting {
+  key       String   @id
+  value     String
+  label     String?
+  section   String?
+  updatedAt DateTime @updatedAt
+
+  @@schema("core")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// META — Meta Ads. Viene de newappmeta prácticamente sin cambios.
+// ═════════════════════════════════════════════════════════════════════════════
+
+model BusinessManager {
+  id             String      @id @default(cuid())
+  name           String
+  bmIdMeta       String
+  systemUserId   String      @unique
+  /// AES-256-GCM con la misma clave maestra que core.Secret
+  encryptedToken String
+  tokenLast4     String?
+  status         String      @default("active")
+  operationId    String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  adAccounts     AdAccount[]
+
+  @@index([operationId])
+  @@schema("meta")
+}
+
+model AdAccount {
+  id              String          @id @default(cuid())
+  accountIdMeta   String          @unique
+  name            String
+  currency        String          @default("USD")
+  bmId            String
+  businessManager BusinessManager @relation(fields: [bmId], references: [id], onDelete: Cascade)
+  lastSynced      DateTime?
+  createdAt       DateTime        @default(now())
+
+  @@schema("meta")
+}
+
+/// Trabajos puntuales lanzados por una persona (clonar, sincronizar, borrar).
+/// Distinto de automations.AutomationTask, que son los programados.
+model MetaJob {
+  id        String   @id @default(cuid())
+  type      String
+  status    String   @default("pending")
+  input     Json
+  output    Json?
+  error     String?
+  progress  Int      @default(0)
+  logs      Json     @default("[]")
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@map("jobs")
+  @@schema("meta")
+}
+
+/// Credencial AISLADA para Fanpages / PBIA. No se mezcla con BusinessManager
+/// a propósito: este token solo lista páginas y gestiona PBIAs.
+model FanpageToken {
+  id             String   @id @default(cuid())
+  name           String
+  systemUserId   String   @unique
+  encryptedToken String
+  status         String   @default("active")
+  operationId    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([operationId])
+  @@schema("meta")
+}
+
+model Fanpage {
+  id                 String    @id @default(cuid())
+  pageId             String    @unique
+  name               String
+  category           String?
+  picture            String?
+  bmId               String?
+  bmName             String?
+  igReal             String?
+  igId               String? // PBIA
+  pbiaCheckedAt      DateTime?
+  tasks              String[]
+  isPublished        Boolean?
+  verificationStatus String?
+  activeAds          Int?
+  adsSyncedAt        DateTime?
+  operationId        String?
+  lastSynced         DateTime  @default(now())
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([bmId])
+  @@index([operationId])
+  @@schema("meta")
+}
+
+model LaunchSheet {
+  id          String     @id @default(cuid())
+  name        String
+  kind        String     @default("launches")
+  columns     Json?
+  sortOrder   Int        @default(0)
+  operationId String?
+  createdBy   String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  rows        SheetRow[]
+
+  @@index([operationId])
+  @@schema("meta")
+}
+
+model SheetRow {
+  id        String      @id @default(cuid())
+  sheetId   String
+  sheet     LaunchSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  sortOrder Int         @default(0)
+  data      Json        @default("{}")
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([sheetId])
+  @@schema("meta")
+}
+
+model Launch {
+  id           String   @id @default(cuid())
+  sheetId      String?
+  status       String   @default("pendiente")
+  mlaNombre    String   @default("")
+  businessName String   @default("")
+  businessId   String   @default("")
+  adAccount    String   @default("")
+  fanPageId    String   @default("")
+  fanPage      String   @default("")
+  fanPageBm    String   @default("")
+  nameAds      String   @default("")
+  nameAdsUrl   String   @default("")
+  oferta       String   @default("")
+  tipoAnuncio  String   @default("")
+  strategy     String   @default("")
+  dominios     String   @default("")
+  urlLanzar    String   @default("")
+  suffixUrl    String   @default("")
+  nombrePixel  String   @default("")
+  pixelId      String   @default("")
+  tokenEnc     String?
+  notes        String   @default("")
+  sortOrder    Int      @default(0)
+  operationId  String?
+  createdBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([operationId])
+  @@index([sheetId])
+  @@schema("meta")
+}
+
+model AccountInsightSnapshot {
+  id            String   @id @default(cuid())
+  accountId     String
+  operationId   String
+  datePreset    String
+  accountName   String?
+  accountStatus Int      @default(0)
+  bmId          String?
+  data          Json?
+  spend         Float    @default(0)
+  syncedAt      DateTime @default(now())
+
+  @@unique([accountId, operationId, datePreset])
+  @@index([operationId, datePreset])
+  @@schema("meta")
+}
+
+model ListingSnapshot {
+  id          String   @id @default(cuid())
+  operationId String
+  accountId   String
+  kind        String // campaigns|adsets|ads|ins:campaign|ins:adset|ins:ad
+  datePreset  String   @default("")
+  data        Json
+  syncedAt    DateTime @default(now())
+
+  @@unique([operationId, accountId, kind, datePreset])
+  @@index([operationId, accountId])
+  @@schema("meta")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// LINKS — acortador. El redirector lee Link por slug; el panel vive en la app.
+// MetaConnection desaparece: su token pasa a core.Secret.
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Domain {
+  id         String    @id @default(cuid())
+  host       String    @unique
+  active     Boolean   @default(true)
+  verified   Boolean   @default(false)
+  verifiedAt DateTime?
+  lastIps    String[]  @default([])
+  createdAt  DateTime  @default(now())
+  links      Link[]
+
+  @@schema("links")
+}
+
+/// URL de FunnelFlux con sus {{macros}}, guardada para reutilizar.
+model FunnelUrl {
+  id          String   @id @default(cuid())
+  name        String
+  urlTemplate String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  links       Link[]
+
+  @@schema("links")
+}
+
+model Link {
+  id           String     @id @default(cuid())
+  slug         String     @unique
+  domainId     String
+  domain       Domain     @relation(fields: [domainId], references: [id])
+  funnelUrlId  String?
+  funnelUrl    FunnelUrl? @relation(fields: [funnelUrlId], references: [id])
+  /// URL final con los IDs ya sustituidos. El redirect solo añade el fbclid.
+  targetUrl    String
+  adId         String
+  adsetId      String
+  campaignId   String
+  assetId      String?
+  adName       String?
+  campaignName String?
+  active       Boolean    @default(true)
+  clicks       Int        @default(0)
+  operationId  String?
+  createdBy    String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([domainId])
+  @@index([funnelUrlId])
+  @@index([operationId])
+  @@schema("links")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUTOMATIONS — los trabajos programados.
+//
+// Cambio importante respecto a automations-hub: hoy el horario y el on/off que
+// se ven en el panel NO los usa el worker (los cron están escritos a mano en el
+// código y solo se respeta el interruptor general). Aquí `enabled`, `cron` y el
+// alcance de cuentas son la fuente de verdad y el runner los obedece.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Cómo elige cuentas una automatización.
+enum ScopeMode {
+  ALL // todas las que vea el token (comportamiento actual)
+  INCLUDE // solo las listadas
+  EXCLUDE // todas menos las listadas
+
+  @@schema("automations")
+}
+
+model AutomationTask {
+  /// Identificador estable que enlaza con el runner en el worker:
+  /// billing_check, live_tracker, update_sheet_daily, meta_autopause,
+  /// meta_disapproved_cleanup
+  name        String  @id
+  displayName String
+  description String?
+
+  /// Horario en formato cron. AHORA SÍ lo lee el worker.
+  cron     String
+  timezone String  @default("America/Bogota")
+  enabled  Boolean @default(true)
+
+  /// Sobre qué cuentas actúa. Antes: siempre todas, sin forma de excluir
+  /// ninguna — y estas tareas pausan campañas y borran anuncios reales.
+  scopeMode     ScopeMode @default(ALL)
+  scopeAccounts String[]  @default([]) // ids de cuenta de Meta
+
+  /// Umbrales y ajustes propios de cada tarea (gasto mínimo, días, etc.)
+  params Json @default("{}")
+
+  /// Modo prueba: calcula y reporta lo que haría, sin ejecutarlo.
+  dryRun Boolean @default(false)
+
+  operationId String?
+  lastRunAt   DateTime?
+  updatedBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  runs     TaskRun[]
+  triggers TaskTrigger[]
+
+  @@map("automation_tasks")
+  @@schema("automations")
+}
+
+model TaskRun {
+  id          Int            @id @default(autoincrement())
+  taskName    String
+  task        AutomationTask @relation(fields: [taskName], references: [name], onDelete: Cascade)
+  startedAt   DateTime
+  finishedAt  DateTime?
+  success     Boolean?
+  errorMsg    String?
+  result      Json?
+  durationS   Float?
+  triggeredBy String         @default("scheduler") // scheduler | manual | api
+  dryRun      Boolean        @default(false)
+
+  @@index([taskName, startedAt(sort: Desc)])
+  @@map("task_runs")
+  @@schema("automations")
+}
+
+model AccountSnapshot {
+  id          Int      @id @default(autoincrement())
+  checkedAt   DateTime
+  accountId   String
+  accountName String?
+  statusCode  Int?
+  statusLabel String?
+  level       String?
+  balance     Float?
+  currency    String?
+  errorMsg    String?
+
+  @@index([checkedAt(sort: Desc)])
+  @@index([accountId, checkedAt(sort: Desc)])
+  @@map("account_snapshots")
+  @@schema("automations")
+}
+
+model BillingAlert {
+  id          Int       @id @default(autoincrement())
+  alertedAt   DateTime
+  accountId   String
+  accountName String?
+  alertType   String?
+  message     String?
+  resolvedAt  DateTime?
+
+  @@index([alertedAt(sort: Desc)])
+  @@map("billing_alerts")
+  @@schema("automations")
+}
+
+/// "Ejecutar ahora" desde la UI.
+model TaskTrigger {
+  id          Int            @id @default(autoincrement())
+  taskName    String
+  task        AutomationTask @relation(fields: [taskName], references: [name], onDelete: Cascade)
+  requestedAt DateTime       @default(now())
+  requestedBy String?
+  processed   Boolean        @default(false)
+  processedAt DateTime?
+
+  @@index([processed])
+  @@map("task_triggers")
+  @@schema("automations")
+}
+
+/// Interruptor general y otros flags globales del módulo.
+model SystemFlag {
+  key       String   @id
+  value     Boolean
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+
+  @@map("system_flags")
+  @@schema("automations")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MONITOR — salud de tracking links.
+// Hoy vive en ficheros JSON (state.json, incidents.jsonl, config.yaml). Pasarlo
+// a tablas elimina el bug del bind-mount y da histórico consultable.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum LinkHealth {
+  OK
+  FAIL
+  UNKNOWN
+
+  @@schema("monitor")
+}
+
+model MonitoredLink {
+  id             String  @id @default(cuid())
+  name           String
+  url            String
+  /// Destino final esperado tras seguir los redirects
+  expectedUrl    String?
+  /// Si el enlace debe redirigir. Un tracking link que deja de redirigir y
+  /// devuelve 200 en su propia URL está roto, aunque responda.
+  expectRedirect Boolean @default(true)
+  /// Texto que debe aparecer en el lander (se comprueba con Playwright)
+  expectedText   String?
+  maxResponseMs  Int     @default(10000)
+  enabled        Boolean @default(true)
+
+  /// Estado actual — lo que antes era state.json
+  status           LinkHealth @default(UNKNOWN)
+  lastCheckAt      DateTime?
+  lastOkAt         DateTime?
+  lastFailAt       DateTime?
+  consecutiveFails Int        @default(0)
+
+  /// Petición de comprobación inmediata desde el panel. El motor la recoge en
+  /// menos de un minuto, sin esperar al ciclo de 30. Se pone a NULL al hacerla.
+  checkRequestedAt DateTime?
+
+  operationId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  checks    MonitorCheck[]
+  incidents MonitorIncident[]
+
+  @@index([status])
+  @@index([operationId])
+  @@schema("monitor")
+}
+
+/// Resultado de cada ciclo. Permite gráficas de uptime, que hoy no existen.
+model MonitorCheck {
+  id         BigInt        @id @default(autoincrement())
+  linkId     String
+  link       MonitoredLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  checkedAt  DateTime      @default(now())
+  status     LinkHealth
+  httpStatus Int?
+  finalUrl   String?
+  responseMs Int?
+  /// Qué dimensión falló: status | redirect | content | timeout
+  failReason String?
+  detail     String?
+
+  @@index([linkId, checkedAt(sort: Desc)])
+  @@index([checkedAt(sort: Desc)])
+  @@schema("monitor")
+}
+
+/// Solo las TRANSICIONES OK→FAIL y FAIL→OK. Es lo que se notifica a Slack.
+model MonitorIncident {
+  id       String        @id @default(cuid())
+  linkId   String
+  link     MonitoredLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  openedAt DateTime      @default(now())
+  closedAt DateTime?
+  reason   String?
+  detail   String?
+  notified Boolean       @default(false)
+
+  @@index([linkId, openedAt(sort: Desc)])
+  @@index([closedAt])
+  @@schema("monitor")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CLONER — clonado de campañas entre cuentas y Business Managers.
+//
+// Viene de opwinners, que guardaba todo en un SQLite local (`datos.db`) con los
+// tokens en texto plano. Aquí los tokens se cifran con la misma clave maestra
+// que core.Secret, y las plantillas —que pesan cientos de KB— pasan a jsonb.
+//
+// Es un módulo aparte de META a propósito: META lee y duplica DENTRO de una
+// cuenta; esto mueve campañas ENTRE cuentas y BMs, resubiendo cada asset. Son
+// permisos distintos y quien hace lo uno no tiene por qué hacer lo otro.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Token de usuario de Meta con alias. Aparte de meta.BusinessManager porque
+/// aquel guarda tokens de system user (que no ven `me/accounts` ni las páginas
+/// personales), y el clonador necesita justo eso para resolver crossposts.
+model CloneToken {
+  id             String    @id @default(cuid())
+  alias          String    @unique
+  /// AES-256-GCM, mismo formato que core.Secret
+  encryptedToken String
+  /// Últimos 6 caracteres, para reconocerlo en pantalla sin descifrarlo
+  hint           String?
+  userName       String?
+  userIdMeta     String?
+  valid          Boolean   @default(false)
+  error          String?
+  checkedAt      DateTime?
+  operationId    String?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([operationId])
+  @@schema("cloner")
+}
+
+/// Una campaña congelada: campaña + adsets + ads con su creative, ya con las
+/// ediciones de idioma aplicadas. Se lanza en cualquier cuenta aunque la
+/// campaña original se haya borrado.
+model CloneTemplate {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  note             String   @default("")
+  sourceCampaignId String   @default("")
+  sourceAccountId  String   @default("")
+  /// { campana, adsets[], ads[] } — lo que lee el motor en vez de llamar al API
+  structure        Json
+  operationId      String?
+  createdBy        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([operationId])
+  @@schema("cloner")
+}
+
+/// Historial: qué se copió, a dónde y con qué incidencias.
+model CloneRun {
+  id              String   @id @default(cuid())
+  sourceCampaign  String   @default("")
+  sourceName      String   @default("")
+  sourceAccount   String   @default("")
+  targetAccount   String
+  targetName      String   @default("")
+  targetCampaign  String   @default("")
+  adsets          Int      @default(0)
+  ads             Int      @default(0)
+  requestedCopies Int      @default(1)
+  /// Hoy siempre false: una simulación no crea nada, así que no se registra.
+  /// El campo existe para poder guardarlas si algún día interesa revisarlas.
+  dryRun          Boolean  @default(false)
+  /// Anuncios que no se pudieron crear, con su motivo
+  issues          Json     @default("[]")
+  detail          Json     @default("{}")
+  jobId           String?
+  operationId     String?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([operationId])
+  @@schema("cloner")
+}
+
+/// Una corrida en curso. Antes vivía en un diccionario en memoria del proceso:
+/// un reinicio a media clonación dejaba al usuario sin saber qué se había
+/// creado ya en Meta. En la base sobrevive y se puede consultar desde la web.
+model CloneJob {
+  id              String    @id @default(cuid())
+  /// queued | running | done | error | cancelled
+  ///
+  /// Las clonaciones nacen en `queued` y un despachador las ejecuta de una en
+  /// una: dos a la vez se pisan el directorio temporal de vídeos, y además
+  /// multiplican las peticiones a Meta cuando ya limita de sobra.
+  status          String    @default("queued")
+  /// Alguien pidió pararlo. Lo que ya se creó en Meta se queda, pero el motor
+  /// no pasa a la siguiente cuenta.
+  cancelRequested Boolean   @default(false)
+  /// Lo que el motor va anotando, línea a línea
+  lines           Json      @default("[]")
+  results         Json      @default("[]")
+  input           Json      @default("{}")
+  error           String?
+  operationId     String?
+  createdBy       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  finishedAt      DateTime?
+
+  @@index([status, createdAt(sort: Desc)])
+  @@schema("cloner")
+}
+
+/// Catálogo de idiomas de Meta (locale id → nombre). Se pide una vez y se
+/// guarda: hace falta para nombrar los idiomas de una plantilla, donde puede
+/// no haber ningún token a mano.
+model CloneCache {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@schema("cloner")
+}

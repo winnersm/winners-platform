@@ -1,0 +1,34 @@
+# Configuración global
+defaults:
+  max_response_ms: 8000        # umbral de lentitud por defecto
+  timeout_ms: 15000            # timeout duro de request
+  max_redirects: 10
+  user_agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+# Macros de Facebook → valores dummy para poder chequear sin que FB los rellene.
+# El checker reemplaza estos placeholders en cualquier URL antes de pegarle.
+macro_replacements:
+  "{{ad.id}}": "monitor_test"
+  "{{adset.id}}": "monitor_test"
+  "{{campaign.id}}": "monitor_test"
+  "{{campaign.name}}": "monitor"
+  "{{adset.name}}": "monitor"
+  "{{ad.name}}": "monitor"
+  "{{placement}}": "feed"
+  "{{site_source_name}}": "fb"
+  "{{platform}}": "fb"
+  "{{position}}": "feed"
+
+links:
+  - name: "LegacyCapitalPath → Morning Method (The Second Check)"
+    url: "https://track.legacycapitalpath.com/fts/3ooZQ3APoaRK-3oVsF2vpBmZ1?ad_id={{ad.id}}&adset_id={{adset.id}}&placement={{placement}}&site_source={{site_source_name}}&campaign_name={{campaign.name}}&adset_name={{adset.name}}&ad_name={{ad.name}}&platform={{platform}}&position={{position}}&campaign={{campaign.id}}&c=1"
+    expected_final: "morning-method.com"     # substring o regex que debe contener el host/URL final
+    expected_redirect: true                  # debe haber al menos 1 salto
+    expected_text: "The Second Check"         # title del lander; dispara render Playwright
+    max_response_ms: 8000                     # opcional, override del default
+
+  # - name: "Otro link..."
+  #   url: "https://track.tudominio.com/..."
+  #   expected_final: "lander-destino.com"
+  #   expected_redirect: true
+  #   expected_text: "frase clave del lander"

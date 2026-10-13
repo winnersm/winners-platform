@@ -1,0 +1,276 @@
+# Winners Platform — base de datos, cola y la app única.
+#
+# Un solo fichero para todo el stack: menos piezas que recordar al desplegar.
+#
+#   docker compose up -d                     levanta todo
+#   docker compose up -d --build winners-web reconstruye solo la app
+#
+# Postgres y Redis se publican SOLO en 127.0.0.1 (se llega por túnel SSH).
+# La app la publica Traefik. La base nunca sale de winners-net.
+#
+# El worker de duplicaciones NO se despliega todavía: Meta Ads se sigue
+# sirviendo desde newappmeta hasta su cutover, y dos workers sobre la misma
+# cola duplicarían las clonaciones de anuncios reales.
+
+# El nombre del proyecto se fija a mano: Compose lo deduciría del directorio
+# ("infra") y crearía volúmenes nuevos, dejando huérfanos los datos actuales.
+name: winners-platform
+
+services:
+  winners-pg:
+    image: postgres:16-alpine
+    container_name: winners-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: winners
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD}
+      POSTGRES_DB: winners
+      # Checksums de datos: detectan corrupción silenciosa en disco.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - winners-pg-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5435:5432"
+    networks: [winners-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U winners"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Postgres por defecto asume un servidor dedicado. Estos valores lo ajustan
+    # a un host compartido con ~15 GB de RAM y varias apps más.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=120
+      # Registrar consultas lentas: sin esto los problemas de rendimiento son
+      # invisibles hasta que alguien se queja.
+      - -c
+      - log_min_duration_statement=1000
+
+  winners-redis:
+    image: redis:7-alpine
+    container_name: winners-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6389:6379"
+    volumes:
+      - winners-redis-data:/data
+    networks: [winners-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  winners-web:
+    build:
+      context: ../
+      dockerfile: apps/web/Dockerfile
+      # Sin esto se construiría la última etapa del Dockerfile (el worker) y
+      # el contenedor arrancaría el proceso equivocado.
+      target: runner
+    image: winners-web
+    container_name: winners-web
+    restart: unless-stopped
+    env_file: .env.web
+    environment:
+      NODE_ENV: production
+      TZ: America/Bogota
+      # Dentro de Docker se llega por nombre de servicio, no por localhost.
+      REDIS_URL: redis://winners-redis:6379
+    volumes:
+      # Solo lectura: la app muestra el registro del worker, no lo escribe.
+      - automations-logs:/app/logs:ro
+    depends_on:
+      winners-pg:
+        condition: service_healthy
+      winners-redis:
+        condition: service_healthy
+    networks: [winners-net, proxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.winners-web.rule=Host(`app.mastermindwinners.com`)"
+      # El dominio antiguo del acortador lleva al panel de Links dentro de la
+      # app. Se mantiene para no romper enlaces guardados ni marcadores.
+      - "traefik.http.routers.winners-web-links.rule=Host(`links.mastermindwinners.com`)"
+      - "traefik.http.routers.winners-web-links.entrypoints=websecure"
+      - "traefik.http.routers.winners-web-links.tls=true"
+      - "traefik.http.routers.winners-web-links.service=winners-web"
+      - "traefik.http.routers.winners-web-links.middlewares=links-a-app"
+      - "traefik.http.middlewares.links-a-app.redirectregex.regex=^https://links\\.mastermindwinners\\.com/(.*)"
+      - "traefik.http.middlewares.links-a-app.redirectregex.replacement=https://app.mastermindwinners.com/links"
+      - "traefik.http.middlewares.links-a-app.redirectregex.permanent=false"
+      - "traefik.http.routers.winners-web-automations.rule=Host(`automations.mastermindwinners.com`)"
+      - "traefik.http.routers.winners-web-automations.entrypoints=websecure"
+      - "traefik.http.routers.winners-web-automations.tls=true"
+      - "traefik.http.routers.winners-web-automations.service=winners-web"
+      - "traefik.http.routers.winners-web-automations.middlewares=automations-a-app"
+      - "traefik.http.middlewares.automations-a-app.redirectregex.regex=^https://automations\\.mastermindwinners\\.com/(.*)"
+      - "traefik.http.middlewares.automations-a-app.redirectregex.replacement=https://app.mastermindwinners.com/automations"
+      - "traefik.http.middlewares.automations-a-app.redirectregex.permanent=false"
+      - "traefik.http.routers.winners-web-monitor.rule=Host(`ffmonitorlinks.mastermindwinners.com`)"
+      - "traefik.http.routers.winners-web-monitor.entrypoints=websecure"
+      - "traefik.http.routers.winners-web-monitor.tls=true"
+      - "traefik.http.routers.winners-web-monitor.service=winners-web"
+      - "traefik.http.routers.winners-web-monitor.middlewares=monitor-a-app"
+      - "traefik.http.middlewares.monitor-a-app.redirectregex.regex=^https://ffmonitorlinks\\.mastermindwinners\\.com/(.*)"
+      - "traefik.http.middlewares.monitor-a-app.redirectregex.replacement=https://app.mastermindwinners.com/monitor"
+      - "traefik.http.middlewares.monitor-a-app.redirectregex.permanent=false"
+      - "traefik.http.routers.winners-web-ads.rule=Host(`ads.mastermindwinners.com`)"
+      - "traefik.http.routers.winners-web-ads.entrypoints=websecure"
+      - "traefik.http.routers.winners-web-ads.tls=true"
+      - "traefik.http.routers.winners-web-ads.service=winners-web"
+      - "traefik.http.routers.winners-web-ads.middlewares=ads-a-app"
+      - "traefik.http.middlewares.ads-a-app.redirectregex.regex=^https://ads\\.mastermindwinners\\.com/(.*)"
+      - "traefik.http.middlewares.ads-a-app.redirectregex.replacement=https://app.mastermindwinners.com/meta/dashboard"
+      - "traefik.http.middlewares.ads-a-app.redirectregex.permanent=false"
+      - "traefik.http.routers.winners-web.entrypoints=websecure"
+      - "traefik.http.routers.winners-web.tls=true"
+      - "traefik.http.services.winners-web.loadbalancer.server.port=3000"
+
+  # Resuelve los enlaces cortos. Aislado del panel a propósito: estos dominios
+  # reciben tráfico pagado y no pueden cortarse en cada despliegue de la app.
+  #
+  # Convive con el acortador antiguo durante el cambio: primero responde en un
+  # host de prueba, y solo cuando está verificado se le pasan los dominios.
+  winners-redirector:
+    build:
+      context: ../
+      dockerfile: apps/redirector/Dockerfile
+    image: winners-redirector
+    container_name: winners-redirector
+    restart: unless-stopped
+    env_file: .env.web
+    environment:
+      NODE_ENV: production
+      TZ: America/Bogota
+    depends_on:
+      winners-pg:
+        condition: service_healthy
+    networks: [winners-net, proxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      # Los tres dominios de tracking, más un host de reserva para poder
+      # comprobar el servicio sin tocar el tráfico real.
+      - "traefik.http.routers.winners-redirector.rule=Host(`linknowhub.com`) || Host(`globalnodehub.com`) || Host(`elevationgateway.com`) || Host(`r.mastermindwinners.com`)"
+      # Prioridad alta: gana al router del acortador antiguo mientras ambos
+      # coexisten, sin necesidad de apagarlo para probar.
+      - "traefik.http.routers.winners-redirector.priority=200"
+      - "traefik.http.routers.winners-redirector.entrypoints=websecure"
+      - "traefik.http.routers.winners-redirector.tls=true"
+      - "traefik.http.services.winners-redirector.loadbalancer.server.port=3000"
+
+  # Ejecuta las tareas programadas. Lee su configuración (horario, on/off,
+  # alcance de cuentas, modo prueba) de la base y la relee cada minuto, así
+  # que lo que se cambia en el panel se aplica sin reiniciar nada.
+  automations-worker:
+    build:
+      context: ../services/automations-worker
+      dockerfile: Dockerfile
+    image: winners-automations-worker
+    container_name: winners-automations-worker
+    restart: unless-stopped
+    env_file: .env.web
+    environment:
+      TZ: America/Bogota
+    volumes:
+      - automations-logs:/app/logs
+    depends_on:
+      winners-pg:
+        condition: service_healthy
+    # Sin etiquetas de Traefik: es un proceso de fondo, no tiene interfaz.
+    networks: [winners-net]
+
+  # Comprueba los tracking links cada ciclo. Imagen pesada (Chromium) y sin
+  # interfaz: queda fuera del monolito a propósito.
+  monitor-engine:
+    build:
+      context: ../services/monitor-engine
+      dockerfile: Dockerfile
+    image: winners-monitor-engine
+    container_name: winners-monitor-engine
+    restart: unless-stopped
+    env_file: .env.web
+    environment:
+      TZ: America/Bogota
+    volumes:
+      - monitor-logs:/app/logs
+    depends_on:
+      winners-pg:
+        condition: service_healthy
+    networks: [winners-net]
+
+  # Motor del Clonador: copia campañas entre cuentas y BMs resubiendo cada
+  # asset. Viene de opwinners y se conserva en Python a propósito — ahí está
+  # todo lo aprendido de la Graph API (crossposts, PBIA, asset_feed_spec) y
+  # reescribirlo habría sido regalar fallos.
+  #
+  # Lo llama solo la app, por la red interna y con un token compartido. Sin
+  # etiquetas de Traefik: no sale a internet.
+  cloner-engine:
+    build:
+      context: ../services/cloner-engine
+      dockerfile: Dockerfile
+    image: winners-cloner-engine
+    container_name: winners-cloner-engine
+    restart: unless-stopped
+    env_file: .env.web
+    environment:
+      TZ: America/Bogota
+    depends_on:
+      winners-pg:
+        condition: service_healthy
+    networks: [winners-net]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8760/salud')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Procesa las duplicaciones de Meta en segundo plano. Servicio aparte para
+  # que un despliegue de la web no corte una clonación a medias.
+  meta-worker:
+    build:
+      context: ../
+      dockerfile: apps/web/Dockerfile
+      target: worker
+    image: winners-meta-worker
+    container_name: winners-meta-worker
+    restart: unless-stopped
+    env_file: .env.web
+    environment:
+      NODE_ENV: production
+      TZ: America/Bogota
+      REDIS_URL: redis://winners-redis:6379
+    depends_on:
+      winners-pg:
+        condition: service_healthy
+      winners-redis:
+        condition: service_healthy
+    networks: [winners-net]
+
+volumes:
+  monitor-logs:
+  automations-logs:
+  winners-pg-data:
+  winners-redis-data:
+
+networks:
+  winners-net:
+    name: winners-net
+  proxy:
+    external: true
