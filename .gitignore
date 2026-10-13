@@ -16,7 +16,9 @@ build/
 !.env.example
 *.key
 *.pem
-secrets/
+# Anclado a la raíz: ignora una carpeta /secrets/ de archivos secretos, pero NO
+# carpetas de código con ese nombre (p.ej. app/(app)/admin/secrets).
+/secrets/
 
 # prisma
 packages/db/generated/
