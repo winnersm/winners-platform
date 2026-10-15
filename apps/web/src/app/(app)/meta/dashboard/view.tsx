@@ -215,8 +215,8 @@ export default function DashboardView() {
               const profit = m?.profit ?? 0;
               const rawId = acc.id.replace("act_", "");
               return (
-                <TableRow key={acc.id} className={`cursor-pointer border-l-4 ${profit > 0 ? "bg-green-50 border-l-green-400 hover:bg-green-100/60" : profit < 0 ? "bg-red-50 border-l-red-400 hover:bg-red-100/60" : "border-l-transparent hover:bg-muted/30"}`}
-                  onClick={() => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}>
+                <TableRow key={acc.id} className={`border-l-4 ${showArchived ? "" : "cursor-pointer"} ${profit > 0 ? "bg-green-50 border-l-green-400 hover:bg-green-100/60" : profit < 0 ? "bg-red-50 border-l-red-400 hover:bg-red-100/60" : "border-l-transparent hover:bg-muted/30"}`}
+                  onClick={showArchived ? undefined : () => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}>
                   <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1">{acc.name}</span></TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(m?.spend ?? 0)}</TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(m?.revenue ?? 0)}</TableCell>

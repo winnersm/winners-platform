@@ -508,7 +508,13 @@ export async function getAdAccounts(bmId?: string, operationId?: string): Promis
     while (nextUrl) {
       const res = await fetch(nextUrl);
       const json = (await res.json()) as { data?: Record<string, string>[], error?: unknown, paging?: { next?: string } };
-      if (json.error) break;
+      // Nunca devolver (ni cachear) una lista PARCIAL: un error a mitad de
+      // paginación dejaría fuera cuentas reales. Quien archiva por ausencia
+      // (dashboard-sync) las borraría del dashboard por error. Mejor fallar y
+      // que el llamador decida (los syncs hacen catch y se saltan la pasada).
+      if (json.error) {
+        throw new Error(`Meta error al listar cuentas (BM ${bm.id}): ${JSON.stringify(json.error)}`);
+      }
       for (const acc of json.data ?? []) {
         if (!seen.has(acc.id)) {
           seen.add(acc.id);

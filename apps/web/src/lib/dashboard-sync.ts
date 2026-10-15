@@ -68,6 +68,16 @@ export async function syncDashboardForOperation(
     });
   }
 
+  // Desarchivar cualquier cuenta que haya VUELTO al BM, aunque hoy sus insights
+  // fallen (rate limit): si está en la lista viva, no es un fantasma. Sin esto,
+  // una cuenta reincorporada con insights fallidos seguiría oculta como archivada.
+  if (currentIds.size > 0) {
+    await prisma.accountInsightSnapshot.updateMany({
+      where: { operationId, accountId: { in: [...currentIds] }, removedFromBmAt: { not: null } },
+      data: { removedFromBmAt: null, lastSeenInBmAt: now },
+    });
+  }
+
   // Archivar (NUNCA borrar) las cuentas que ya no aparecen en el BM. Se marca la
   // fecha de salida una sola vez; las ya archivadas se dejan intactas. El guardia
   // evita archivar todo si el BM respondiera con lista vacía por un fallo.
