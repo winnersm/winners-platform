@@ -4,7 +4,7 @@ if (process.env.NODE_ENV !== "production") {
 import { Worker, type Job as BullJob } from "bullmq";
 import { prisma } from "@winners/db";
 import { duplicateCampaign, duplicateAdsets, duplicateAds } from "@/lib/meta-api";
-import { createPBIA, syncActiveAds } from "@/lib/fanpages-api";
+import { createPBIA, syncActiveAds, syncAllFanpages } from "@/lib/fanpages-api";
 import { syncAllDashboards } from "@/lib/dashboard-sync";
 import { syncAllListings, syncListingsForAccount } from "@/lib/listing-sync";
 import { duplicationsQueue, JOB_TYPES } from "@/lib/queue";
@@ -84,6 +84,11 @@ async function processJob(bullJob: BullJob) {
   if (bullJob.name === "SYNC_LISTINGS") {
     console.log("[worker] SYNC_LISTINGS: sincronizando listados de todas las operaciones...");
     await syncAllListings();
+    return;
+  }
+  if (bullJob.name === "SYNC_FANPAGES") {
+    console.log("[worker] SYNC_FANPAGES: sincronizando fanpages de todas las operaciones...");
+    await syncAllFanpages();
     return;
   }
   if (bullJob.name === "SYNC_LISTINGS_ACCOUNT") {
@@ -246,7 +251,14 @@ console.log("[worker] Listo, esperando jobs en la cola 'duplications'...");
       JOB_TYPES.SYNC_LISTINGS, {},
       { repeat: { every: 30 * 60 * 1000 }, removeOnComplete: true, removeOnFail: true }
     );
-    console.log("[worker] Sync programado: dashboard (20 min) + listados (30 min).");
+    // Fanpages: una vez al día a las 5:00 AM (hora Colombia). No lleva pasada
+    // inmediata: las páginas cambian poco y el botón "Sincronizar" cubre lo
+    // urgente. El repeatable es idempotente por su clave (cron + tz).
+    await duplicationsQueue.add(
+      JOB_TYPES.SYNC_FANPAGES, {},
+      { repeat: { pattern: "0 5 * * *", tz: "America/Bogota" }, removeOnComplete: true, removeOnFail: true }
+    );
+    console.log("[worker] Sync programado: dashboard (20 min) + listados (30 min) + fanpages (diario 5:00 AM).");
   } catch (e) {
     console.error("[worker] No se pudo programar el sync de dashboard:", e);
   }

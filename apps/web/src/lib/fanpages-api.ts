@@ -100,6 +100,26 @@ export async function syncFanpages(operationId: string): Promise<{ synced: numbe
   return { synced: pages.length, removed };
 }
 
+// Sincroniza las fanpages de TODAS las operaciones que tengan token. Lo llama
+// el job diario del worker. El botón "Sincronizar" de la UI solo cubre la
+// operación activa; esto cubre las demás y evita que su lista se quede vieja.
+// Cada operación va en su propio try: que una falle no frena a las otras.
+export async function syncAllFanpages(): Promise<void> {
+  const ops = await prisma.operation.findMany({ select: { id: true, name: true } });
+  for (const op of ops) {
+    try {
+      if (!(await hasFanpageToken(op.id))) {
+        console.log(`[fanpages-sync] ${op.name}: sin token, se omite`);
+        continue;
+      }
+      const { synced, removed } = await syncFanpages(op.id);
+      console.log(`[fanpages-sync] ${op.name}: ${synced} sincronizadas, ${removed} eliminadas`);
+    } catch (e) {
+      console.error(`[fanpages-sync] ${op.name} falló:`, e);
+    }
+  }
+}
+
 // Lee las páginas de la operación desde la DB (lo que consume la UI).
 export async function getFanpagesFromDB(operationId?: string) {
   return prisma.fanpage.findMany({ where: operationId ? { operationId } : {}, orderBy: { name: "asc" } });
