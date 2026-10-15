@@ -27,9 +27,13 @@ async function requireOwner() {
   return actor;
 }
 
-/** Guarda solo los últimos 4 caracteres, para reconocer el secreto sin revelarlo. */
-function hintOf(value: string): string {
-  return value.slice(-4);
+/**
+ * Pista: últimos 4 caracteres, para reconocer el secreto sin revelarlo. En
+ * valores cortos (< 8) no se guarda nada — ahí los 4 últimos filtrarían media
+ * clave. Los tokens/API keys reales son largos, así que no se pierde utilidad.
+ */
+function hintOf(value: string): string | null {
+  return value.length >= 8 ? value.slice(-4) : null;
 }
 
 const keySchema = z
