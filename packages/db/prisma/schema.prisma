@@ -377,6 +377,31 @@ model AccountInsightSnapshot {
   @@schema("meta")
 }
 
+/// Libro diario de gasto por cuenta (append-only, una fila por día). A diferencia
+/// de AccountInsightSnapshot (que sobrescribe la última foto), esto ACUMULA: así
+/// se puede consultar el gasto por cualquier rango con calendario, y el histórico
+/// de una cuenta sobrevive aunque salga del BM.
+model AccountSpendDaily {
+  id          String   @id @default(cuid())
+  accountId   String
+  operationId String
+  date        DateTime @db.Date // el día (sin hora)
+  accountName String?
+  bmId        String?
+  spend       Float    @default(0)
+  revenue     Float    @default(0)
+  sales       Int      @default(0)
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([accountId, operationId, date])
+  @@index([operationId, date])
+  @@index([accountId])
+  @@schema("meta")
+}
+
 model ListingSnapshot {
   id          String   @id @default(cuid())
   operationId String

@@ -29,7 +29,7 @@ function coalesce<T>(key: string, fn: () => Promise<T>): Promise<T> {
 export type ProgressCallback = (progress: number, msg: string) => Promise<void>;
 const noop: ProgressCallback = () => Promise.resolve();
 
-async function getActiveToken(bmId?: string, operationId?: string): Promise<{ token: string; bmDbId: string }> {
+export async function getActiveToken(bmId?: string, operationId?: string): Promise<{ token: string; bmDbId: string }> {
   const bm = await prisma.businessManager.findFirst({
     where: {
       status: "active",

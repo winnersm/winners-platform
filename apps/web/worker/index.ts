@@ -7,6 +7,7 @@ import { duplicateCampaign, duplicateAdsets, duplicateAds } from "@/lib/meta-api
 import { createPBIA, syncActiveAds, syncAllFanpages } from "@/lib/fanpages-api";
 import { syncAllDashboards } from "@/lib/dashboard-sync";
 import { syncAllListings, syncListingsForAccount } from "@/lib/listing-sync";
+import { syncAllSpendDaily } from "@/lib/spend-history";
 import { duplicationsQueue, JOB_TYPES } from "@/lib/queue";
 
 const connection = {
@@ -89,6 +90,11 @@ async function processJob(bullJob: BullJob) {
   if (bullJob.name === "SYNC_FANPAGES") {
     console.log("[worker] SYNC_FANPAGES: sincronizando fanpages de todas las operaciones...");
     await syncAllFanpages();
+    return;
+  }
+  if (bullJob.name === "SYNC_SPEND_DAILY") {
+    console.log("[worker] SYNC_SPEND_DAILY: acumulando gasto diario de todas las operaciones...");
+    await syncAllSpendDaily();
     return;
   }
   if (bullJob.name === "SYNC_LISTINGS_ACCOUNT") {
@@ -258,7 +264,13 @@ console.log("[worker] Listo, esperando jobs en la cola 'duplications'...");
       JOB_TYPES.SYNC_FANPAGES, {},
       { repeat: { pattern: "0 5 * * *", tz: "America/Bogota" }, removeOnComplete: true, removeOnFail: true }
     );
-    console.log("[worker] Sync programado: dashboard (20 min) + listados (30 min) + fanpages (diario 5:00 AM).");
+    // Gasto diario: una vez al día a las 6:00 AM (hora Colombia). Reescribe una
+    // ventana corta (últimos días) para capturar ajustes tardíos de Meta.
+    await duplicationsQueue.add(
+      JOB_TYPES.SYNC_SPEND_DAILY, {},
+      { repeat: { pattern: "0 6 * * *", tz: "America/Bogota" }, removeOnComplete: true, removeOnFail: true }
+    );
+    console.log("[worker] Sync programado: dashboard (20 min) + listados (30 min) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
   } catch (e) {
     console.error("[worker] No se pudo programar el sync de dashboard:", e);
   }

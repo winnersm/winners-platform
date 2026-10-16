@@ -14,6 +14,7 @@ import {
   Contact,
   Rocket,
   LayoutDashboard,
+  CalendarDays,
   Timer,
   Link2,
   Activity,
@@ -64,6 +65,7 @@ const NAV_GROUPS: { label: string; module: Module; items: NavItem[] }[] = [
     module: "META",
     items: [
       { scope: "dashboard", href: "/meta/dashboard", label: "Rendimiento", icon: LayoutDashboard, module: "META" },
+      { scope: "dashboard", href: "/meta/spend", label: "Gasto histórico", icon: CalendarDays, module: "META" },
       { scope: "accounts", href: "/meta/accounts", label: "Cuentas", icon: Building2, module: "META" },
       { scope: "campaigns", href: "/meta/campaigns", label: "Campañas", icon: Megaphone, module: "META" },
       { scope: "fanpages", href: "/meta/fanpages", label: "Fanpages", icon: Contact, module: "META" },
