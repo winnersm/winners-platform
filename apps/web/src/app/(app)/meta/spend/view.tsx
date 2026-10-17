@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, RefreshCw, TrendingUp } from "lucide-react";
+import { CalendarDays, RefreshCw, TrendingUp, History } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,6 +24,17 @@ interface Result {
   rows: Row[];
   totals: { spend: number; revenue: number; sales: number };
   series: Array<{ date: string; spend: number; revenue: number }>;
+  lastSync?: string | null;
+}
+
+function agoLabel(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return "hace segundos";
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `hace ${h} h`;
+  return `hace ${Math.floor(h / 24)} d`;
 }
 
 function ymd(d: Date): string {
@@ -57,6 +69,8 @@ export default function SpendView() {
   const [to, setTo] = useState(ranges[2].to);
   const [data, setData] = useState<Result | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
 
   const load = useCallback(async (f: string, t: string) => {
     setLoading(true);
@@ -73,6 +87,37 @@ export default function SpendView() {
   }, []);
 
   useEffect(() => { load(from, to); }, [from, to, load]);
+
+  // Actualiza los últimos días (lo mismo que el job de las 6:00 AM, a demanda).
+  const doSync = useCallback(async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/spend/sync", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error ?? "No se pudo sincronizar"); return; }
+      toast.success(`Actualizado: ${json.accounts} cuentas · ${json.days} días`);
+      await load(from, to);
+    } catch { toast.error("Error de red al sincronizar"); }
+    finally { setSyncing(false); }
+  }, [from, to, load]);
+
+  // Siembra hacia atrás. Lento y con muchas llamadas: se confirma antes.
+  const doBackfill = useCallback(async () => {
+    if (!confirm("Traer el histórico de los últimos 12 meses desde Meta. Tarda varios minutos y hace muchas llamadas. ¿Continuar?")) return;
+    setBackfilling(true);
+    try {
+      const res = await fetch("/api/spend/backfill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ months: 12 }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error ?? "No se pudo traer el histórico"); return; }
+      toast.success(`Histórico de ${json.months} meses: ${json.accounts} cuentas · ${json.days} días`);
+      await load(from, to);
+    } catch { toast.error("Error de red en el histórico"); }
+    finally { setBackfilling(false); }
+  }, [from, to, load]);
 
   const activeRange = ranges.find((r) => r.from === from && r.to === to)?.label;
   const maxSpend = Math.max(1, ...(data?.series ?? []).map((s) => s.spend));
@@ -94,7 +139,20 @@ export default function SpendView() {
         <span className="text-sm text-muted-foreground">
           {loading ? "Cargando…" : `${data?.rows.length ?? 0} cuentas · ${from} → ${to}`}
         </span>
+        {!loading && data?.lastSync && (
+          <span className="text-[11px] text-muted-foreground/70">· actualizado {agoLabel(data.lastSync)}</span>
+        )}
         <TrendingUp className={`h-3.5 w-3.5 ml-1 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={doBackfill} disabled={backfilling || syncing} title="Trae el histórico de los últimos 12 meses desde Meta (lento)">
+            <History className={`h-3.5 w-3.5 mr-1.5 ${backfilling ? "animate-spin" : ""}`} />
+            {backfilling ? "Trayendo histórico…" : "Traer histórico"}
+          </Button>
+          <Button size="sm" className="h-8 px-2.5 text-xs" onClick={doSync} disabled={syncing || backfilling} title="Actualiza los últimos días desde Meta">
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Sincronizando…" : "Sincronizar con Meta"}
+          </Button>
+        </div>
       </div>
 
       {/* Calendario + rangos rápidos */}
@@ -160,7 +218,7 @@ export default function SpendView() {
               <TableHead className="text-right">REVENUE</TableHead>
               <TableHead className="text-right">PROFIT</TableHead>
               <TableHead className="text-right">VENTAS</TableHead>
-              <TableHead className="text-right">DÍAS CON GASTO</TableHead>
+              <TableHead className="text-right">DÍAS CON DATOS</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

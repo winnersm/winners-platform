@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getActiveOperationId } from "@/lib/operation";
 import { getSpendByRange } from "@/lib/spend-history";
+import { prisma } from "@winners/db";
 
 // Gasto histórico por rango de fechas (desde el libro diario AccountSpendDaily).
 // Instantáneo, no toca Meta: lo alimenta el job SYNC_SPEND_DAILY.
@@ -27,6 +28,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "'from' no puede ser posterior a 'to'" }, { status: 400 });
   }
 
-  const result = await getSpendByRange(op, from, to);
-  return NextResponse.json(result);
+  // lastSync NO va acotado al rango: es "cuándo se actualizó el libro", que es
+  // independiente de las fechas que se estén consultando.
+  const [result, last] = await Promise.all([
+    getSpendByRange(op, from, to),
+    prisma.accountSpendDaily.aggregate({ where: { operationId: op }, _max: { updatedAt: true } }),
+  ]);
+  return NextResponse.json({ ...result, lastSync: last._max.updatedAt });
 }
