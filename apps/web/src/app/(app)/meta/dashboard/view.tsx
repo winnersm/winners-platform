@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { LayoutDashboard, RefreshCw, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -48,6 +49,7 @@ export default function DashboardView() {
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [live, setLive] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const runId = useRef(0);
 
   // Camino en VIVO (fallback): recorre cuentas y pega a Meta por cada una.
@@ -111,6 +113,27 @@ export default function DashboardView() {
   }, [datePreset, runLive, showArchived]);
 
   useEffect(() => { run(); }, [run]);
+
+  // Sincronización REAL contra Meta a demanda: lo mismo que hace el job de
+  // fondo cada 20 min, pero sin esperarlo. Al terminar recarga la vista.
+  const syncWithMeta = useCallback(async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/dashboard/sync", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error ?? "No se pudo sincronizar"); return; }
+      if ((json.accounts ?? 0) === 0) {
+        toast("Meta no devolvió cuentas para esta operación");
+      } else {
+        toast.success(`Sincronizadas ${json.accounts} cuentas${json.archived ? ` · ${json.archived} archivadas` : ""}`);
+      }
+      await run();
+    } catch {
+      toast.error("Error de red al sincronizar");
+    } finally {
+      setSyncing(false);
+    }
+  }, [run]);
 
   // Totales agregados (suma de crudos → recalcular derivados).
   const tot = accounts.reduce(
@@ -176,7 +199,10 @@ export default function DashboardView() {
             <SelectTrigger className="h-8 w-28 text-xs bg-white"><SelectValue /></SelectTrigger>
             <SelectContent>{DATE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
           </Select>
-          <Button variant="ghost" size="sm" className="h-8 px-2" onClick={run} disabled={loading}><RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /></Button>
+          <Button size="sm" className="h-8 px-2.5 text-xs" onClick={syncWithMeta} disabled={syncing || loading} title="Trae datos frescos desde Meta y actualiza los snapshots">
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Sincronizando…" : "Sincronizar con Meta"}
+          </Button>
         </div>
       </div>
 
