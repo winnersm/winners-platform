@@ -23,28 +23,14 @@ export async function syncDashboardForOperation(
   // cualquier estado). Es la fuente de verdad para saber qué cuentas siguen.
   const currentIds = new Set(accounts.map((a) => a.id.replace("act_", "")));
   const now = new Date();
-  const active = accounts.filter((a) => a.account_status === 1);
   let snaps = 0;
 
-  // De qué cuentas pedimos insights: las activas (siempre) y, además, las que YA
-  // mostramos (tienen snapshot). Pedir solo las activas dejaba congelada la foto
-  // de una cuenta al pausarse: el dashboard seguía enseñando su "today" de hace
-  // semanas como si fuera de hoy. No se amplía a cuentas nunca vistas, para no
-  // empezar a traer cuentas cerradas que nadie mira.
-  const tracked = new Set(
-    (
-      await prisma.accountInsightSnapshot.findMany({
-        where: { operationId },
-        select: { accountId: true },
-        distinct: ["accountId"],
-      })
-    ).map((r) => r.accountId),
-  );
-  const toFetch = accounts.filter(
-    (a) => a.account_status === 1 || tracked.has(a.id.replace("act_", "")),
-  );
-
-  for (const a of toFetch) {
+  // Se piden insights de TODAS las cuentas del BM, no solo de las activas. Si
+  // solo se pidieran las activas, al desactivarse una cuenta su última foto
+  // quedaría congelada y el dashboard seguiría mostrando su "today" de hace
+  // semanas como si fuera de hoy. Además evita la incoherencia de enseñar unas
+  // cuentas desactivadas sí y otras no, según si alguna vez estuvieron activas.
+  for (const a of accounts) {
     const rawId = a.id.replace("act_", "");
     for (const preset of presets) {
       let insights: MetaInsights | null = null;
@@ -74,9 +60,9 @@ export async function syncDashboardForOperation(
     }
   }
 
-  // Cuentas que SIGUEN en el BM pero no están activas (pausadas/cerradas): no se
-  // les piden insights, pero sí refrescamos su estado y su membresía para que no
-  // queden congeladas como activas ni se archiven por error.
+  // Red de seguridad para las cuentas no activas: si su llamada de insights
+  // falló arriba (rate limit, permiso), la fila no se habría tocado y seguiría
+  // marcada como activa. Esto refresca estado y membresía sin gastar cuota.
   for (const a of accounts) {
     if (a.account_status === 1) continue;
     const rawId = a.id.replace("act_", "");
@@ -108,7 +94,7 @@ export async function syncDashboardForOperation(
     archived = res.count;
   }
 
-  return { accounts: active.length, snapshots: snaps, archived };
+  return { accounts: accounts.length, snapshots: snaps, archived };
 }
 
 // Sincroniza TODAS las operaciones (lo llama el job en segundo plano).

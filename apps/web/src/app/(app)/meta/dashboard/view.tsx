@@ -36,6 +36,17 @@ const DATE_PRESETS = [
   { value: "maximum", label: "Máximo" },
 ];
 
+// Códigos de account_status de Meta. El 1 (activa) no se etiqueta: es lo normal.
+const ACCOUNT_STATUS: Record<number, string> = {
+  2: "desactivada",
+  3: "sin liquidar",
+  7: "en revisión",
+  8: "pago pendiente",
+  9: "periodo de gracia",
+  100: "cierre pendiente",
+  101: "cerrada",
+};
+
 export default function DashboardView() {
 
   const router = useRouter();
@@ -249,7 +260,7 @@ export default function DashboardView() {
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="text-xs font-medium line-clamp-1">{acc.name}</span>
                       {acc.account_status !== 1 && (
-                        <span className="shrink-0 rounded px-1 py-[1px] text-[9px] font-medium bg-amber-100 text-amber-700" title={`Estado Meta ${acc.account_status}: la cuenta no está activa`}>pausada</span>
+                        <span className="shrink-0 rounded px-1 py-[1px] text-[9px] font-medium bg-amber-100 text-amber-700" title={`account_status ${acc.account_status} en Meta`}>{ACCOUNT_STATUS[acc.account_status] ?? `estado ${acc.account_status}`}</span>
                       )}
                     </div>
                   </TableCell>
