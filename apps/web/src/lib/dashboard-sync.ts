@@ -26,7 +26,25 @@ export async function syncDashboardForOperation(
   const active = accounts.filter((a) => a.account_status === 1);
   let snaps = 0;
 
-  for (const a of active) {
+  // De qué cuentas pedimos insights: las activas (siempre) y, además, las que YA
+  // mostramos (tienen snapshot). Pedir solo las activas dejaba congelada la foto
+  // de una cuenta al pausarse: el dashboard seguía enseñando su "today" de hace
+  // semanas como si fuera de hoy. No se amplía a cuentas nunca vistas, para no
+  // empezar a traer cuentas cerradas que nadie mira.
+  const tracked = new Set(
+    (
+      await prisma.accountInsightSnapshot.findMany({
+        where: { operationId },
+        select: { accountId: true },
+        distinct: ["accountId"],
+      })
+    ).map((r) => r.accountId),
+  );
+  const toFetch = accounts.filter(
+    (a) => a.account_status === 1 || tracked.has(a.id.replace("act_", "")),
+  );
+
+  for (const a of toFetch) {
     const rawId = a.id.replace("act_", "");
     for (const preset of presets) {
       let insights: MetaInsights | null = null;

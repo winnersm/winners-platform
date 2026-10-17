@@ -58,8 +58,10 @@ export default function DashboardView() {
     let accs: Acct[] = [];
     try { accs = ((await fetch("/api/meta/accounts").then((r) => r.json())).accounts ?? []) as Acct[]; } catch {}
     if (my !== runId.current) return;
-    setAccounts(accs);
+    // En vivo solo se piden insights de las activas, así que se muestran esas:
+    // los totales tienen que cuadrar con las filas visibles.
     const active = accs.filter((a) => a.account_status === 1);
+    setAccounts(active);
     setTotal(active.length);
     await Promise.all(active.map(async (a) => {
       const rawId = a.id.replace("act_", "");
@@ -101,8 +103,9 @@ export default function DashboardView() {
         for (const a of list) insMap[a.id] = a.insights ?? null;
         setAccounts(accs);
         setIns(insMap);
-        const active = accs.filter((a) => a.account_status === 1);
-        setTotal(active.length); setDone(active.length);
+        // Totales y tabla incluyen TODAS las cuentas vivas del BM (activas y
+        // pausadas): lo que se suma es exactamente lo que se ve.
+        setTotal(accs.length); setDone(accs.length);
         setSyncedAt(snap.syncedAt ?? null); setLive(false); setLoading(false);
         return;
       }
@@ -152,7 +155,6 @@ export default function DashboardView() {
 
   const toggleSort = (key: string) => setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
   const rows = accounts
-    .filter((a) => showArchived || a.account_status === 1)
     .map((a) => ({ acc: a, m: calcMetrics(ins[a.id]) }))
     .sort((x, y) => {
       const dir = sort.dir === "asc" ? 1 : -1;
@@ -182,7 +184,7 @@ export default function DashboardView() {
         <div className="flex items-center gap-2">
           <LayoutDashboard className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">Rendimiento</h1>
-          <span className="text-sm text-muted-foreground">{loading ? `Cargando ${done}/${total} cuentas…` : `${total} ${showArchived ? "cuentas archivadas" : "cuentas activas"}`}</span>
+          <span className="text-sm text-muted-foreground">{loading ? `Cargando ${done}/${total} cuentas…` : `${total} ${showArchived ? "cuentas archivadas" : "cuentas"}`}</span>
           {!loading && !showArchived && (
             live
               ? <span className="text-[11px] text-amber-600" title="Datos en vivo desde Meta (preset sin snapshot)">· en vivo</span>
@@ -243,7 +245,14 @@ export default function DashboardView() {
               return (
                 <TableRow key={acc.id} className={`border-l-4 ${showArchived ? "" : "cursor-pointer"} ${profit > 0 ? "bg-green-50 border-l-green-400 hover:bg-green-100/60" : profit < 0 ? "bg-red-50 border-l-red-400 hover:bg-red-100/60" : "border-l-transparent hover:bg-muted/30"}`}
                   onClick={showArchived ? undefined : () => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}>
-                  <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1">{acc.name}</span></TableCell>
+                  <TableCell className="py-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-xs font-medium line-clamp-1">{acc.name}</span>
+                      {acc.account_status !== 1 && (
+                        <span className="shrink-0 rounded px-1 py-[1px] text-[9px] font-medium bg-amber-100 text-amber-700" title={`Estado Meta ${acc.account_status}: la cuenta no está activa`}>pausada</span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(m?.spend ?? 0)}</TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(m?.revenue ?? 0)}</TableCell>
                   <TableCell className={`py-2 text-right text-xs tabular-nums font-medium ${profit > 0 ? "text-green-600" : profit < 0 ? "text-red-600" : ""}`}>{fmtMoney(profit)}</TableCell>
