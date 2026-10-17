@@ -37,14 +37,15 @@ const DATE_PRESETS = [
 ];
 
 // Códigos de account_status de Meta. El 1 (activa) no se etiqueta: es lo normal.
-const ACCOUNT_STATUS: Record<number, string> = {
-  2: "desactivada",
-  3: "sin liquidar",
-  7: "en revisión",
-  8: "pago pendiente",
-  9: "periodo de gracia",
-  100: "cierre pendiente",
-  101: "cerrada",
+// Rojo = la cuenta no puede gastar. Ámbar = sigue viva pero necesita atención.
+const ACCOUNT_STATUS: Record<number, { label: string; tone: "red" | "amber" }> = {
+  2: { label: "Desactivado", tone: "red" },
+  3: { label: "Sin liquidar", tone: "amber" },
+  7: { label: "En revisión", tone: "amber" },
+  8: { label: "Pago pendiente", tone: "amber" },
+  9: { label: "Periodo de gracia", tone: "amber" },
+  100: { label: "Cierre pendiente", tone: "red" },
+  101: { label: "Cerrado", tone: "red" },
 };
 
 export default function DashboardView() {
@@ -253,14 +254,22 @@ export default function DashboardView() {
             ) : rows.map(({ acc, m }) => {
               const profit = m?.profit ?? 0;
               const rawId = acc.id.replace("act_", "");
+              const st = acc.account_status === 1
+                ? null
+                : ACCOUNT_STATUS[acc.account_status] ?? { label: `Estado ${acc.account_status}`, tone: "amber" as const };
               return (
                 <TableRow key={acc.id} className={`border-l-4 ${showArchived ? "" : "cursor-pointer"} ${profit > 0 ? "bg-green-50 border-l-green-400 hover:bg-green-100/60" : profit < 0 ? "bg-red-50 border-l-red-400 hover:bg-red-100/60" : "border-l-transparent hover:bg-muted/30"}`}
                   onClick={showArchived ? undefined : () => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}>
                   <TableCell className="py-2">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="text-xs font-medium line-clamp-1">{acc.name}</span>
-                      {acc.account_status !== 1 && (
-                        <span className="shrink-0 rounded px-1 py-[1px] text-[9px] font-medium bg-amber-100 text-amber-700" title={`account_status ${acc.account_status} en Meta`}>{ACCOUNT_STATUS[acc.account_status] ?? `estado ${acc.account_status}`}</span>
+                      {st && (
+                        <span
+                          className={`shrink-0 rounded px-1.5 py-[1px] text-[9px] font-semibold ${st.tone === "red" ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}
+                          title={`account_status ${acc.account_status} en Meta`}
+                        >
+                          {st.label}
+                        </span>
                       )}
                     </div>
                   </TableCell>
