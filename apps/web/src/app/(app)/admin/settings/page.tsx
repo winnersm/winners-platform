@@ -10,11 +10,21 @@ export default async function SettingsPage() {
   await requireGrant("ADMIN", "READ");
 
   const op = (await getActiveOperationId()) ?? undefined;
-  const bms = await prisma.businessManager.findMany({
-    where: op ? { operationId: op } : {},
-    orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, bmIdMeta: true, systemUserId: true, status: true, updatedAt: true },
-  });
+  const [bms, trashed] = await Promise.all([
+    prisma.businessManager.findMany({
+      where: { ...(op ? { operationId: op } : {}), deletedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, bmIdMeta: true, systemUserId: true, status: true, updatedAt: true },
+    }),
+    prisma.businessManager.findMany({
+      where: { ...(op ? { operationId: op } : {}), deletedAt: { not: null } },
+      orderBy: { deletedAt: "desc" },
+      select: {
+        id: true, name: true, bmIdMeta: true, systemUserId: true, status: true, updatedAt: true,
+        deletedAt: true, deletedByName: true, deletedReason: true,
+      },
+    }),
+  ]);
 
   return (
     <div className="max-w-2xl space-y-8">
@@ -24,7 +34,7 @@ export default async function SettingsPage() {
           Gestión de Business Managers, usuarios y accesos
         </p>
       </div>
-      <SettingsTabs initialBMs={bms} />
+      <SettingsTabs initialBMs={bms} initialTrash={trashed} />
     </div>
   );
 }

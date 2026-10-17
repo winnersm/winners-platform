@@ -11,6 +11,9 @@ interface BM {
   systemUserId: string;
   status: string;
   updatedAt: Date;
+  deletedAt?: Date | null;
+  deletedByName?: string | null;
+  deletedReason?: string | null;
 }
 
 /**
@@ -18,7 +21,7 @@ interface BM {
  * plataforma y está en /admin/users. Dejar dos sitios donde dar de alta a
  * alguien es justo el problema que esta consolidación viene a resolver.
  */
-export function SettingsTabs({ initialBMs }: { initialBMs: BM[] }) {
+export function SettingsTabs({ initialBMs, initialTrash }: { initialBMs: BM[]; initialTrash: BM[] }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 border-b pb-2">
@@ -26,7 +29,7 @@ export function SettingsTabs({ initialBMs }: { initialBMs: BM[] }) {
         <h2 className="text-sm font-medium">Business Managers</h2>
       </div>
 
-      <SettingsClient initialBMs={initialBMs} />
+      <SettingsClient initialBMs={initialBMs} initialTrash={initialTrash} />
 
       <Link
         href="/admin/users"

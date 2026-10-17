@@ -210,7 +210,15 @@ model BusinessManager {
   updatedAt      DateTime    @updatedAt
   adAccounts     AdAccount[]
 
+  /// Papelera: eliminar un BM no borra la fila, la marca. Así desaparece de la
+  /// lista pero queda el rastro de quién, cuándo y por qué — y se puede restaurar.
+  deletedAt      DateTime?
+  deletedById    String?
+  deletedByName  String?
+  deletedReason  String?
+
   @@index([operationId])
+  @@index([operationId, deletedAt])
   @@schema("meta")
 }
 

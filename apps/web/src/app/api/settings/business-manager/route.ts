@@ -21,7 +21,7 @@ async function fetchSystemUser(token: string): Promise<{ id: string; name: strin
   return { id: json.id, name: json.name ?? json.id };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   // Configurar tokens es administración: se exige permiso de administración
   // sobre Meta, no el rol ADMIN del modelo de roles antiguo.
   let actor;
@@ -34,10 +34,16 @@ export async function GET() {
     throw e;
   }
   const op = (await getActiveOperationId()) ?? undefined;
+  // ?trash=1 devuelve la papelera; por defecto solo los vigentes.
+  const trash = new URL(req.url).searchParams.get("trash") === "1";
   const bms = await prisma.businessManager.findMany({
-    where: op ? { operationId: op } : {},
-    orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, bmIdMeta: true, systemUserId: true, status: true, createdAt: true, updatedAt: true },
+    where: { ...(op ? { operationId: op } : {}), deletedAt: trash ? { not: null } : null },
+    orderBy: trash ? { deletedAt: "desc" } : { createdAt: "asc" },
+    select: {
+      id: true, name: true, bmIdMeta: true, systemUserId: true, status: true,
+      createdAt: true, updatedAt: true,
+      deletedAt: true, deletedByName: true, deletedReason: true,
+    },
   });
   return NextResponse.json(bms);
 }
@@ -109,6 +115,61 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get("id");
   if (!id) return NextResponse.json({ error: "ID requerido" }, { status: 400 });
 
-  await prisma.businessManager.update({ where: { id }, data: { status: "inactive" } });
+  // El motivo es obligatorio: una papelera sin el porqué no sirve de nada.
+  const body = (await req.json().catch(() => ({}))) as { reason?: string };
+  const reason = (body.reason ?? "").trim();
+  if (reason.length < 3) {
+    return NextResponse.json({ error: "Indica el motivo de la eliminación" }, { status: 400 });
+  }
+
+  const bm = await prisma.businessManager.update({
+    where: { id },
+    data: {
+      deletedAt: new Date(),
+      deletedById: actor.id,
+      deletedByName: actor.name ?? actor.email,
+      deletedReason: reason,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      module: "META", userId: actor.id, action: "BM_DELETED",
+      entityType: "BusinessManager", entityId: bm.id,
+      payload: { name: bm.name, reason },
+    },
+  });
+
+  return NextResponse.json({ ok: true });
+}
+
+// Restaurar desde la papelera.
+export async function PATCH(req: NextRequest) {
+  let actor;
+  try {
+    actor = await assertGrant("META", "ADMIN");
+  } catch (e) {
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: "Sin permiso" }, { status: 403 });
+    }
+    throw e;
+  }
+
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "ID requerido" }, { status: 400 });
+
+  const bm = await prisma.businessManager.update({
+    where: { id },
+    data: { deletedAt: null, deletedById: null, deletedByName: null, deletedReason: null },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      module: "META", userId: actor.id, action: "BM_RESTORED",
+      entityType: "BusinessManager", entityId: bm.id,
+      payload: { name: bm.name },
+    },
+  });
+
   return NextResponse.json({ ok: true });
 }
