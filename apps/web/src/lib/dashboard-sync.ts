@@ -11,10 +11,11 @@ export const DASHBOARD_PRESETS = ["today", "last_7d", "last_30d"];
 export async function syncDashboardForOperation(
   operationId: string,
   presets: string[] = DASHBOARD_PRESETS,
+  forceRefresh?: boolean,
 ): Promise<{ accounts: number; snapshots: number; archived: number }> {
   let accounts;
   try {
-    accounts = await getAdAccounts(undefined, operationId);
+    accounts = await getAdAccounts(undefined, operationId, forceRefresh);
   } catch {
     return { accounts: 0, snapshots: 0, archived: 0 };
   }

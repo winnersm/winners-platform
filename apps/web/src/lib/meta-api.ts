@@ -483,10 +483,12 @@ export interface MetaAdAccount {
   bmId: string;
 }
 
-export async function getAdAccounts(bmId?: string, operationId?: string): Promise<MetaAdAccount[]> {
+export async function getAdAccounts(bmId?: string, operationId?: string, skipCache?: boolean): Promise<MetaAdAccount[]> {
   const cacheKey = `meta:accounts:${operationId ?? "all"}:${bmId ?? "default"}`;
-  const cached = await redis.get(cacheKey);
-  if (cached) return JSON.parse(cached);
+  if (!skipCache) {
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+  }
 
   const activeBMs = await prisma.businessManager.findMany({
     where: {

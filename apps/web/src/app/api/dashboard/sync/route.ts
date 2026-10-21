@@ -20,8 +20,9 @@ export async function POST() {
   // Pre-chequeo de acceso: syncDashboardForOperation se traga los errores a
   // propósito (para que el job nunca reviente), pero aquí la persona necesita
   // saber POR QUÉ no se sincronizó.
+  // forceRefresh: true porque es un sync manual, no queremos caché.
   try {
-    await getAdAccounts(undefined, op);
+    await getAdAccounts(undefined, op, true);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Sin acceso a Meta" },
@@ -29,6 +30,6 @@ export async function POST() {
     );
   }
 
-  const r = await syncDashboardForOperation(op);
+  const r = await syncDashboardForOperation(op, undefined, true);
   return NextResponse.json(r);
 }
