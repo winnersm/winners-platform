@@ -24,7 +24,7 @@ COPY packages/auth/package.json packages/auth/
 # Así que se instala sin scripts (salida limpia) y luego se reconstruyen a mano
 # solo los paquetes que de verdad los necesitan: los motores de Prisma y los
 # binarios nativos que usan Next y su bundler.
-RUN pnpm install --frozen-lockfile --ignore-scripts \
+RUN CI=true pnpm install --frozen-lockfile --ignore-scripts \
  && pnpm rebuild esbuild sharp unrs-resolver msgpackr-extract @prisma/engines prisma
 
 # ─── Build ───────────────────────────────────────────────────────────────────
