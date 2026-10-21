@@ -84,10 +84,10 @@ export default function SpendView() {
     try {
       const res = await fetch(`/api/spend?from=${f}&to=${t}`);
       const json = await res.json();
-      if (!res.ok) { setData({ rows: [], totals: { spend: 0, revenue: 0, sales: 0 }, series: [] }); return; }
+      if (!res.ok) { setData({ rows: [], totals: [], series: [] }); return; }
       setData(json as Result);
     } catch {
-      setData({ rows: [], totals: { spend: 0, revenue: 0, sales: 0 }, series: [] });
+      setData({ rows: [], totals: [], series: [] });
     } finally {
       setLoading(false);
     }
