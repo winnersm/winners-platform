@@ -37,7 +37,7 @@ COPY . .
 # El cliente de Prisma se genera desde el esquema, no viene en el repo.
 # La URL es ficticia a propósito: generate no se conecta a nada.
 RUN CI=true DATABASE_URL="postgresql://build:build@localhost:5432/build" \
-    pnpm approve-builds && pnpm --filter @winners/db exec prisma generate
+    sh -c 'yes y | pnpm approve-builds || true' && pnpm --filter @winners/db exec prisma generate
 
 # Next necesita estas variables presentes al construir; los valores reales
 # llegan en tiempo de ejecución desde el .env del servidor.
