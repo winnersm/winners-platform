@@ -518,10 +518,12 @@ export async function getAdAccounts(bmId?: string, operationId?: string): Promis
       for (const acc of json.data ?? []) {
         if (!seen.has(acc.id)) {
           seen.add(acc.id);
-          accounts.push({ ...acc, bmId: bm.id } as MetaAdAccount);
+          console.log(`[meta-api] Cuenta obtenida: ${acc.id} - ${acc.name} - currency: ${acc.currency ?? 'undefined'}`);
+          accounts.push({ ...acc, currency: acc.currency || "USD", bmId: bm.id } as MetaAdAccount);
         }
       }
       nextUrl = json.paging?.next ?? null;
+      console.log(`[meta-api] Total de cuentas obtenidas hasta ahora: ${accounts.length}`);
     }
   }
 
