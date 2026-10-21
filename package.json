@@ -2,7 +2,7 @@
   "name": "winners-platform",
   "version": "1.0.0",
   "private": true,
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@10.0.0",
   "engines": {
     "node": ">=22"
   },
