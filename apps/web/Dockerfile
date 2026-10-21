@@ -24,7 +24,7 @@ COPY packages/auth/package.json packages/auth/
 # Así que se instala sin scripts (salida limpia) y luego se reconstruyen a mano
 # solo los paquetes que de verdad los necesitan: los motores de Prisma y los
 # binarios nativos que usan Next y su bundler.
-RUN pnpm install --frozen-lockfile --ignore-scripts \
+RUN CI=true pnpm install --frozen-lockfile --ignore-scripts \
  && pnpm rebuild esbuild sharp unrs-resolver msgpackr-extract @prisma/engines prisma
 
 # ─── Build ───────────────────────────────────────────────────────────────────
@@ -36,12 +36,12 @@ COPY . .
 
 # El cliente de Prisma se genera desde el esquema, no viene en el repo.
 # La URL es ficticia a propósito: generate no se conecta a nada.
-RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+RUN CI=true DATABASE_URL="postgresql://build:build@localhost:5432/build" \
     pnpm --filter @winners/db exec prisma generate
 
 # Next necesita estas variables presentes al construir; los valores reales
 # llegan en tiempo de ejecución desde el .env del servidor.
-RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+RUN CI=true DATABASE_URL="postgresql://build:build@localhost:5432/build" \
     AUTH_SECRET="build-time-placeholder" \
     SKIP_ENV_VALIDATION=1 \
     pnpm --filter @winners/web build
@@ -49,7 +49,7 @@ RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
 # El worker de duplicaciones se empaqueta en un solo fichero. Así se resuelven
 # los alias @/ y no depende de cómo pnpm coloque los enlaces de node_modules,
 # que es donde fallaba al compilarlo solo con tsc.
-RUN pnpm --filter @winners/web run build:worker
+RUN CI=true pnpm --filter @winners/web run build:worker
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
