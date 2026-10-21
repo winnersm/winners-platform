@@ -96,7 +96,7 @@ export default function DashboardView() {
     try {
       const snap = await fetch(`/api/dashboard/snapshots?datePreset=${datePreset}&view=${view}`).then((r) => r.json());
       if (my !== runId.current) return;
-      const list = (snap.accounts ?? []) as Array<{ id: string; name: string; bmId: string; account_status: number; insights: Insights | null; removedFromBmAt?: string | null; lastSeenInBmAt?: string | null }>;
+      const list = (snap.accounts ?? []) as Array<{ id: string; name: string; bmId: string; currency?: string; account_status: number; insights: Insights | null; removedFromBmAt?: string | null; lastSeenInBmAt?: string | null }>;
 
       // Archivadas: historial puro desde DB. Sin fallback en vivo (no están en el BM).
       if (showArchived) {
