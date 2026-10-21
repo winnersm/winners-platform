@@ -74,6 +74,7 @@ model Operation {
   name        String
   slug        String       @unique
   active      Boolean      @default(true)
+  timezone    String       @default("America/Bogota")
   createdAt   DateTime     @default(now())
   memberships Membership[]
 
