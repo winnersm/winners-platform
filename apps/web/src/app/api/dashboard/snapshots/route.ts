@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
     id: `act_${r.accountId}`,
     name: r.accountName ?? r.accountId,
     bmId: r.bmId ?? "",
+    currency: r.currency ?? "USD",
     account_status: r.accountStatus,
     insights: r.data ?? null,
     removedFromBmAt: r.removedFromBmAt,
