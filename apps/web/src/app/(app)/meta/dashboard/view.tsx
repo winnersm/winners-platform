@@ -15,6 +15,7 @@ import {
 import { calcMetrics, fmtMoney, fmtInt, fmtPct, type Insights } from "@/lib/metrics";
 
 interface Acct { id: string; name: string; account_status: number; bmId: string; currency: string; removedFromBmAt?: string | null; lastSeenInBmAt?: string | null }
+interface CampaignData { active: number; campaigns: string[] }
 
 function agoLabel(iso: string | null): string {
   if (!iso) return "";
@@ -53,6 +54,7 @@ export default function DashboardView() {
   const router = useRouter();
   const [accounts, setAccounts] = useState<Acct[]>([]);
   const [ins, setIns] = useState<Record<string, Insights | null>>({});
+  const [campaigns, setCampaigns] = useState<Record<string, CampaignData>>({});
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [done, setDone] = useState(0);
@@ -149,6 +151,22 @@ export default function DashboardView() {
       setSyncing(false);
     }
   }, [run]);
+
+  // Cargar campañas activas cuando cambien las cuentas
+  useEffect(() => {
+    if (accounts.length === 0) { setCampaigns({}); return; }
+    const load = async () => {
+      const map: Record<string, CampaignData> = {};
+      for (const a of accounts) {
+        try {
+          const r = await fetch(`/api/dashboard/active-campaigns?accountId=${a.id.replace("act_", "")}&bmId=${a.bmId}`).then(r => r.json());
+          if (r.active > 0) map[a.id] = r;
+        } catch {}
+      }
+      setCampaigns(map);
+    };
+    load();
+  }, [accounts]);
 
   // Totales agregados POR MONEDA (suma de crudos → recalcular derivados).
   const totsByC = new Map<string, { spend: number; revenue: number; sales: number; ic: number }>();
@@ -288,6 +306,11 @@ export default function DashboardView() {
                           title={`account_status ${acc.account_status} en Meta`}
                         >
                           {st.label}
+                        </span>
+                      )}
+                      {campaigns[acc.id] && (
+                        <span className="shrink-0 rounded bg-blue-50 text-blue-600 px-1.5 py-[1px] text-[9px] font-semibold" title={campaigns[acc.id].campaigns.join(", ")}>
+                          {campaigns[acc.id].active} activa{campaigns[acc.id].active !== 1 ? "s" : ""}
                         </span>
                       )}
                     </div>
