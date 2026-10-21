@@ -515,15 +515,19 @@ export async function getAdAccounts(bmId?: string, operationId?: string): Promis
       if (json.error) {
         throw new Error(`Meta error al listar cuentas (BM ${bm.id}): ${JSON.stringify(json.error)}`);
       }
+      console.log(`[meta-api] BM ${bm.id}: Respuesta de Meta tiene ${json.data?.length ?? 0} cuentas`);
       for (const acc of json.data ?? []) {
+        console.log(`[meta-api] BM ${bm.id}: Procesando cuenta - id: ${acc.id}, name: ${acc.name}, status: ${acc.account_status}, currency: ${acc.currency}`);
         if (!seen.has(acc.id)) {
           seen.add(acc.id);
-          console.log(`[meta-api] Cuenta obtenida: ${acc.id} - ${acc.name} - currency: ${acc.currency ?? 'undefined'}`);
+          console.log(`[meta-api] ✓ Agregando: ${acc.id} - ${acc.name}`);
           accounts.push({ ...acc, currency: acc.currency || "USD", bmId: bm.id } as MetaAdAccount);
+        } else {
+          console.log(`[meta-api] ✗ Cuenta duplicada: ${acc.id}`);
         }
       }
       nextUrl = json.paging?.next ?? null;
-      console.log(`[meta-api] Total de cuentas obtenidas hasta ahora: ${accounts.length}`);
+      console.log(`[meta-api] BM ${bm.id}: Procesadas ${json.data?.length ?? 0} cuentas, total acumulado: ${accounts.length}`);
     }
   }
 
