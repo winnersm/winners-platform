@@ -785,7 +785,36 @@ export async function getAccountInsights(
     try {
       const { token } = await getActiveToken(bmId, operationId);
       const fields = "spend,impressions,clicks,ctr,cpc,cpm,actions,action_values,inline_link_clicks,unique_link_clicks_ctr";
-      const url = `${META_API_BASE}/act_${accountId}/insights?fields=${fields}&date_preset=${datePreset}&access_token=${token}`;
+
+      let urlParams: Record<string, string> = { fields, access_token: token };
+
+      // Para "today": usar time_range en la zona horaria de la operación, no UTC
+      if (datePreset === "today" && operationId) {
+        const op = await prisma.operation.findUnique({
+          where: { id: operationId },
+          select: { timezone: true }
+        });
+        if (op?.timezone) {
+          // Calcular el rango de "hoy" en la timezone de la operación
+          const now = new Date();
+          const formatter = new Intl.DateTimeFormat('sv-SE', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            timeZone: op.timezone,
+          });
+          const today = formatter.format(now);
+          console.log(`[meta-api] getAccountInsights("today") para op ${operationId}: usando timezone ${op.timezone}, hoy=${today}`);
+          urlParams.time_range = JSON.stringify({ since: today, until: today });
+        } else {
+          urlParams.date_preset = datePreset;
+        }
+      } else {
+        urlParams.date_preset = datePreset;
+      }
+
+      const params = new URLSearchParams(urlParams);
+      const url = `${META_API_BASE}/act_${accountId}/insights?${params}`;
       const res = await fetch(url);
       const json = await res.json() as { data?: MetaInsights[]; error?: { code?: number; message?: string } };
       if (json.error) throw new Error(`Meta API error ${json.error.code ?? ""}: ${json.error.message ?? "Error al leer insights de cuenta"}`);
