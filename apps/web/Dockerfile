@@ -24,7 +24,7 @@ COPY packages/auth/package.json packages/auth/
 # Así que se instala sin scripts (salida limpia) y luego se reconstruyen a mano
 # solo los paquetes que de verdad los necesitan: los motores de Prisma y los
 # binarios nativos que usan Next y su bundler.
-RUN CI=true pnpm install --frozen-lockfile --ignore-scripts \
+RUN pnpm install --frozen-lockfile --ignore-scripts \
  && pnpm rebuild esbuild sharp unrs-resolver msgpackr-extract @prisma/engines prisma
 
 # ─── Build ───────────────────────────────────────────────────────────────────
@@ -36,14 +36,12 @@ COPY . .
 
 # El cliente de Prisma se genera desde el esquema, no viene en el repo.
 # La URL es ficticia a propósito: generate no se conecta a nada.
-# Pre-approve all builds to avoid pnpm 11.9.0 interactive prompt
-RUN mkdir -p /root/.config/pnpm && echo '{"@prisma/engines": true, "esbuild": true, "msgpackr-extract": true, "prisma": true, "sharp": true, "unrs-resolver": true}' > /root/.config/pnpm/pnpm-state.json && \
-    CI=true DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
     pnpm --filter @winners/db exec prisma generate
 
 # Next necesita estas variables presentes al construir; los valores reales
 # llegan en tiempo de ejecución desde el .env del servidor.
-RUN CI=true DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
     AUTH_SECRET="build-time-placeholder" \
     SKIP_ENV_VALIDATION=1 \
     pnpm --filter @winners/web build
@@ -51,7 +49,7 @@ RUN CI=true DATABASE_URL="postgresql://build:build@localhost:5432/build" \
 # El worker de duplicaciones se empaqueta en un solo fichero. Así se resuelven
 # los alias @/ y no depende de cómo pnpm coloque los enlaces de node_modules,
 # que es donde fallaba al compilarlo solo con tsc.
-RUN CI=true pnpm --filter @winners/web run build:worker
+RUN pnpm --filter @winners/web run build:worker
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
