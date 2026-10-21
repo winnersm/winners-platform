@@ -1,0 +1,32 @@
+{
+  "version": "1.1.0",
+  "dialect": "postgresql",
+  "steps": [
+    {
+      "stepType": "SQL",
+      "meta": {
+        "code": "ALTER TABLE \"meta\".\"AccountSpendDaily\" ADD COLUMN \"currency\" TEXT;"
+      }
+    },
+    {
+      "stepType": "SQL",
+      "meta": {
+        "code": "ALTER TABLE \"meta\".\"AccountInsightSnapshot\" ADD COLUMN \"currency\" TEXT;"
+      }
+    }
+  ],
+  "rollback": [
+    {
+      "stepType": "SQL",
+      "meta": {
+        "code": "ALTER TABLE \"meta\".\"AccountSpendDaily\" DROP COLUMN \"currency\" CASCADE;"
+      }
+    },
+    {
+      "stepType": "SQL",
+      "meta": {
+        "code": "ALTER TABLE \"meta\".\"AccountInsightSnapshot\" DROP COLUMN \"currency\" CASCADE;"
+      }
+    }
+  ]
+}

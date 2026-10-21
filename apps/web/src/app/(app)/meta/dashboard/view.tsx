@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table";
 import { calcMetrics, fmtMoney, fmtInt, fmtPct, type Insights } from "@/lib/metrics";
 
-interface Acct { id: string; name: string; account_status: number; bmId: string; removedFromBmAt?: string | null; lastSeenInBmAt?: string | null }
+interface Acct { id: string; name: string; account_status: number; bmId: string; currency: string; removedFromBmAt?: string | null; lastSeenInBmAt?: string | null }
 
 function agoLabel(iso: string | null): string {
   if (!iso) return "";
@@ -100,7 +100,7 @@ export default function DashboardView() {
 
       // Archivadas: historial puro desde DB. Sin fallback en vivo (no están en el BM).
       if (showArchived) {
-        const accs: Acct[] = list.map((a) => ({ id: a.id, name: a.name, bmId: a.bmId, account_status: a.account_status, removedFromBmAt: a.removedFromBmAt, lastSeenInBmAt: a.lastSeenInBmAt }));
+        const accs: Acct[] = list.map((a) => ({ id: a.id, name: a.name, bmId: a.bmId, currency: a.currency ?? "USD", account_status: a.account_status, removedFromBmAt: a.removedFromBmAt, lastSeenInBmAt: a.lastSeenInBmAt }));
         const insMap: Record<string, Insights | null> = {};
         for (const a of list) insMap[a.id] = a.insights ?? null;
         setAccounts(accs); setIns(insMap);
@@ -110,7 +110,7 @@ export default function DashboardView() {
       }
 
       if (snap.synced && list.length > 0) {
-        const accs: Acct[] = list.map((a) => ({ id: a.id, name: a.name, bmId: a.bmId, account_status: a.account_status }));
+        const accs: Acct[] = list.map((a) => ({ id: a.id, name: a.name, bmId: a.bmId, currency: a.currency ?? "USD", account_status: a.account_status }));
         const insMap: Record<string, Insights | null> = {};
         for (const a of list) insMap[a.id] = a.insights ?? null;
         setAccounts(accs);
@@ -150,20 +150,26 @@ export default function DashboardView() {
     }
   }, [run]);
 
-  // Totales agregados (suma de crudos → recalcular derivados).
-  const tot = accounts.reduce(
-    (s, a) => {
-      const i = ins[a.id];
-      if (!i) return s;
-      const m = calcMetrics(i)!;
-      s.spend += m.spend; s.revenue += m.revenue; s.sales += m.sales; s.ic += m.ic ?? 0;
-      return s;
-    },
+  // Totales agregados POR MONEDA (suma de crudos → recalcular derivados).
+  const totsByC = new Map<string, { spend: number; revenue: number; sales: number; ic: number }>();
+  for (const a of accounts) {
+    const i = ins[a.id];
+    if (!i) continue;
+    const m = calcMetrics(i)!;
+    const key = a.currency;
+    const existing = totsByC.get(key) ?? { spend: 0, revenue: 0, sales: 0, ic: 0 };
+    totsByC.set(key, {
+      spend: existing.spend + m.spend,
+      revenue: existing.revenue + m.revenue,
+      sales: existing.sales + m.sales,
+      ic: existing.ic + (m.ic ?? 0),
+    });
+  }
+  // Total combinado (para compatibilidad, aunque no lo usaremos)
+  const tot = Array.from(totsByC.values()).reduce(
+    (s, t) => ({ spend: s.spend + t.spend, revenue: s.revenue + t.revenue, sales: s.sales + t.sales, ic: s.ic + t.ic }),
     { spend: 0, revenue: 0, sales: 0, ic: 0 }
   );
-  const totProfit = tot.revenue - tot.spend;
-  const totRoi = tot.spend > 0 ? (totProfit / tot.spend) * 100 : null;
-  const totCpa = tot.sales > 0 ? tot.spend / tot.sales : null;
 
   const toggleSort = (key: string) => setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
   const rows = accounts
@@ -220,15 +226,28 @@ export default function DashboardView() {
         </div>
       </div>
 
-      {/* Totales (solo en vista activa; en archivadas los números están congelados) */}
-      {!showArchived && (
-        <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-          <Card label="Gasto" value={fmtMoney(tot.spend)} />
-          <Card label="Revenue" value={fmtMoney(tot.revenue)} />
-          <Card label="Profit" value={fmtMoney(totProfit)} tone={totProfit > 0 ? "pos" : totProfit < 0 ? "neg" : undefined} />
-          <Card label="ROI" value={fmtPct(totRoi)} tone={(totRoi ?? 0) > 0 ? "pos" : (totRoi ?? 0) < 0 ? "neg" : undefined} />
-          <Card label="Ventas" value={fmtInt(tot.sales)} />
-          <Card label="CPA" value={fmtMoney(totCpa)} />
+      {/* Totales por moneda (solo en vista activa; en archivadas los números están congelados) */}
+      {!showArchived && totsByC.size > 0 && (
+        <div className="space-y-3">
+          {Array.from(totsByC.entries()).map(([currency, t]) => {
+            const profit = t.revenue - t.spend;
+            const roi = t.spend > 0 ? (profit / t.spend) * 100 : null;
+            return (
+              <div key={currency} className="space-y-1">
+                {totsByC.size > 1 && (
+                  <div className="text-xs font-medium text-muted-foreground ml-0.5">{currency}</div>
+                )}
+                <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+                  <Card label={`Gasto ${currency}`} value={fmtMoney(t.spend)} />
+                  <Card label={`Revenue ${currency}`} value={fmtMoney(t.revenue)} />
+                  <Card label={`Profit ${currency}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} />
+                  <Card label="ROI" value={fmtPct(roi)} tone={(roi ?? 0) > 0 ? "pos" : (roi ?? 0) < 0 ? "neg" : undefined} />
+                  <Card label={`Ventas ${currency}`} value={fmtInt(t.sales)} />
+                  <Card label="CPA" value={t.sales > 0 ? fmtMoney(t.spend / t.sales) : "—"} />
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -262,7 +281,7 @@ export default function DashboardView() {
                   onClick={showArchived ? undefined : () => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}>
                   <TableCell className="py-2">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-xs font-medium line-clamp-1">{acc.name}</span>
+                      <span className="text-xs font-medium line-clamp-1">{acc.name} ({acc.currency})</span>
                       {st && (
                         <span
                           className={`shrink-0 rounded px-1.5 py-[1px] text-[9px] font-semibold ${st.tone === "red" ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}

@@ -368,6 +368,7 @@ model AccountInsightSnapshot {
   accountName   String?
   accountStatus Int      @default(0)
   bmId          String?
+  currency      String?
   data          Json?
   spend         Float    @default(0)
   syncedAt      DateTime @default(now())
@@ -396,6 +397,7 @@ model AccountSpendDaily {
   date        DateTime @db.Date // el día (sin hora)
   accountName String?
   bmId        String?
+  currency    String?
   spend       Float    @default(0)
   revenue     Float    @default(0)
   sales       Int      @default(0)

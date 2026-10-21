@@ -43,13 +43,13 @@ export async function syncDashboardForOperation(
         where: { accountId_operationId_datePreset: { accountId: rawId, operationId, datePreset: preset } },
         create: {
           accountId: rawId, operationId, datePreset: preset,
-          accountName: a.name, accountStatus: a.account_status, bmId: a.bmId,
+          accountName: a.name, accountStatus: a.account_status, bmId: a.bmId, currency: a.currency,
           data: insights ? (insights as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
           spend: parseFloat(insights?.spend ?? "0"),
           syncedAt: now, lastSeenInBmAt: now, removedFromBmAt: null,
         },
         update: {
-          accountName: a.name, accountStatus: a.account_status, bmId: a.bmId,
+          accountName: a.name, accountStatus: a.account_status, bmId: a.bmId, currency: a.currency,
           data: insights ? (insights as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
           spend: parseFloat(insights?.spend ?? "0"),
           syncedAt: now, lastSeenInBmAt: now, removedFromBmAt: null,

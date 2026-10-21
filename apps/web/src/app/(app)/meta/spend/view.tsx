@@ -15,14 +15,21 @@ interface Row {
   accountId: string;
   name: string;
   bmId: string | null;
+  currency: string | null;
   spend: number;
   revenue: number;
   sales: number;
   days: number;
 }
+interface CurrencyTotal {
+  currency: string | null;
+  spend: number;
+  revenue: number;
+  sales: number;
+}
 interface Result {
   rows: Row[];
-  totals: { spend: number; revenue: number; sales: number };
+  totals: CurrencyTotal[];
   series: Array<{ date: string; spend: number; revenue: number }>;
   lastSync?: string | null;
 }
@@ -121,8 +128,7 @@ export default function SpendView() {
 
   const activeRange = ranges.find((r) => r.from === from && r.to === to)?.label;
   const maxSpend = Math.max(1, ...(data?.series ?? []).map((s) => s.spend));
-  const totProfit = (data?.totals.revenue ?? 0) - (data?.totals.spend ?? 0);
-  const totRoi = data && data.totals.spend > 0 ? (totProfit / data.totals.spend) * 100 : null;
+  const totByC = data?.totals ?? [];
 
   const Card = ({ label, value, tone }: { label: string; value: string; tone?: "pos" | "neg" }) => (
     <div className="rounded-xl border bg-white p-4">
@@ -183,13 +189,33 @@ export default function SpendView() {
         </div>
       </div>
 
-      {/* Totales */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-        <Card label="Gasto" value={fmtMoney(data?.totals.spend ?? 0)} />
-        <Card label="Revenue" value={fmtMoney(data?.totals.revenue ?? 0)} />
-        <Card label="Profit" value={fmtMoney(totProfit)} tone={totProfit > 0 ? "pos" : totProfit < 0 ? "neg" : undefined} />
-        <Card label="ROI" value={fmtPct(totRoi)} tone={(totRoi ?? 0) > 0 ? "pos" : (totRoi ?? 0) < 0 ? "neg" : undefined} />
-      </div>
+      {/* Totales por moneda */}
+      {totByC.length === 0 ? (
+        <div className="rounded-xl border bg-white p-4 text-center text-sm text-muted-foreground">
+          Sin datos en este rango
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {totByC.map((tot) => {
+            const profit = tot.revenue - tot.spend;
+            const roi = tot.spend > 0 ? (profit / tot.spend) * 100 : null;
+            const curr = tot.currency ? ` ${tot.currency}` : "";
+            return (
+              <div key={tot.currency ?? "null"} className="space-y-1">
+                {totByC.length > 1 && (
+                  <div className="text-xs font-medium text-muted-foreground ml-0.5">{tot.currency ?? "SIN MONEDA"}</div>
+                )}
+                <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+                  <Card label={`Gasto${curr}`} value={fmtMoney(tot.spend)} />
+                  <Card label={`Revenue${curr}`} value={fmtMoney(tot.revenue)} />
+                  <Card label={`Profit${curr}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} />
+                  <Card label="ROI" value={fmtPct(roi)} tone={(roi ?? 0) > 0 ? "pos" : (roi ?? 0) < 0 ? "neg" : undefined} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Mini-gráfica diaria */}
       {!loading && (data?.series.length ?? 0) > 0 && (
@@ -230,9 +256,10 @@ export default function SpendView() {
               <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground text-sm">Sin gasto registrado en este rango</TableCell></TableRow>
             ) : data!.rows.map((r) => {
               const profit = r.revenue - r.spend;
+              const currLabel = r.currency ? ` (${r.currency})` : "";
               return (
                 <TableRow key={r.accountId}>
-                  <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1">{r.name}</span></TableCell>
+                  <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1">{r.name}{currLabel}</span></TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(r.spend)}</TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(r.revenue)}</TableCell>
                   <TableCell className={`py-2 text-right text-xs tabular-nums font-medium ${profit > 0 ? "text-green-600" : profit < 0 ? "text-red-600" : ""}`}>{fmtMoney(profit)}</TableCell>

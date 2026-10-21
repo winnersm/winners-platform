@@ -63,6 +63,7 @@ async function upsertDays(
   rawId: string,
   accountName: string,
   bmId: string | undefined,
+  currency: string | undefined,
   operationId: string,
   rows: DailyRaw[],
 ): Promise<number> {
@@ -79,6 +80,7 @@ async function upsertDays(
     const data = {
       accountName,
       bmId: bmId ?? null,
+      currency: currency ?? null,
       spend: parseFloat(r.spend ?? "0"),
       revenue: getPurchaseRevenue(ins),
       sales: Math.round(getPurchaseCount(ins)),
@@ -118,7 +120,7 @@ export async function syncSpendDailyForOperation(
     const rawId = a.id.replace("act_", "");
     try {
       const rows = await fetchDailySpend(rawId, a.bmId, operationId, ymd(since), ymd(until));
-      days += await upsertDays(rawId, a.name, a.bmId, operationId, rows);
+      days += await upsertDays(rawId, a.name, a.bmId, a.currency, operationId, rows);
     } catch {
       continue; // una cuenta que falla no frena a las demás
     }
@@ -175,7 +177,7 @@ export async function backfillSpendDaily(
     for (const w of windows) {
       try {
         const rows = await fetchDailySpend(rawId, a.bmId, operationId, w.since, w.until);
-        days += await upsertDays(rawId, a.name, a.bmId, operationId, rows);
+        days += await upsertDays(rawId, a.name, a.bmId, a.currency, operationId, rows);
       } catch {
         continue;
       }
@@ -189,19 +191,28 @@ export interface SpendRangeRow {
   accountId: string;
   name: string;
   bmId: string | null;
+  currency: string | null;
   spend: number;
   revenue: number;
   sales: number;
   days: number;
 }
 
+export interface CurrencyTotal {
+  currency: string | null;
+  spend: number;
+  revenue: number;
+  sales: number;
+}
+
 export interface SpendRangeResult {
   rows: SpendRangeRow[];
-  totals: { spend: number; revenue: number; sales: number };
+  totals: CurrencyTotal[];
   series: Array<{ date: string; spend: number; revenue: number }>;
 }
 
 // Consulta por rango [from, to] (inclusive): total por cuenta + serie diaria agregada.
+// Totales separados por moneda para evitar mezclar USD/COP/etc.
 export async function getSpendByRange(
   operationId: string,
   from: Date,
@@ -211,7 +222,7 @@ export async function getSpendByRange(
 
   const [grouped, names, series] = await Promise.all([
     prisma.accountSpendDaily.groupBy({
-      by: ["accountId"],
+      by: ["accountId", "currency"],
       where,
       _sum: { spend: true, revenue: true, sales: true },
       _count: { date: true },
@@ -221,7 +232,7 @@ export async function getSpendByRange(
       where,
       distinct: ["accountId"],
       orderBy: { date: "desc" },
-      select: { accountId: true, accountName: true, bmId: true },
+      select: { accountId: true, accountName: true, bmId: true, currency: true },
     }),
     prisma.accountSpendDaily.groupBy({
       by: ["date"],
@@ -231,13 +242,16 @@ export async function getSpendByRange(
     }),
   ]);
 
-  const nameOf = new Map(names.map((n) => [n.accountId, { name: n.accountName, bmId: n.bmId }]));
+  const nameOf = new Map(
+    names.map((n) => [n.accountId, { name: n.accountName, bmId: n.bmId, currency: n.currency }])
+  );
 
   const rows: SpendRangeRow[] = grouped
     .map((g) => ({
       accountId: g.accountId,
       name: nameOf.get(g.accountId)?.name ?? g.accountId,
       bmId: nameOf.get(g.accountId)?.bmId ?? null,
+      currency: g.currency ?? null,
       spend: g._sum.spend ?? 0,
       revenue: g._sum.revenue ?? 0,
       sales: g._sum.sales ?? 0,
@@ -245,10 +259,19 @@ export async function getSpendByRange(
     }))
     .sort((a, b) => b.spend - a.spend);
 
-  const totals = rows.reduce(
-    (s, r) => ({ spend: s.spend + r.spend, revenue: s.revenue + r.revenue, sales: s.sales + r.sales }),
-    { spend: 0, revenue: 0, sales: 0 },
-  );
+  // Totales agrupados por moneda
+  const totalsByC = new Map<string | null, CurrencyTotal>();
+  for (const r of rows) {
+    const key = r.currency ?? null;
+    const existing = totalsByC.get(key) ?? { currency: key, spend: 0, revenue: 0, sales: 0 };
+    totalsByC.set(key, {
+      currency: key,
+      spend: existing.spend + r.spend,
+      revenue: existing.revenue + r.revenue,
+      sales: existing.sales + r.sales,
+    });
+  }
+  const totals = Array.from(totalsByC.values()).sort((a, b) => (a.currency ?? "").localeCompare(b.currency ?? ""));
 
   const seriesOut = series.map((s) => ({
     date: ymd(s.date),
