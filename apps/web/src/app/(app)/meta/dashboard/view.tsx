@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, X, DollarSign, ArrowUpRight, ArrowDownRight, Percent, ShoppingCart, Target, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, X, DollarSign, ArrowUpRight, ArrowDownRight, Percent, ShoppingCart, Target, Search, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -192,6 +192,9 @@ export default function DashboardView() {
   const [live, setLive] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [hideZero, setHideZero] = useState(false);
+  const [currencyFilter, setCurrencyFilter] = useState("ALL");
   const runId = useRef(0);
 
   // Camino en VIVO (fallback): recorre cuentas y pega a Meta por cada una.
@@ -302,15 +305,22 @@ export default function DashboardView() {
   );
 
   const toggleSort = (key: string) => setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
-  const rows = accounts
+  const currencies = Array.from(new Set(accounts.map((a) => a.currency))).sort();
+  const rows = useMemo(() => accounts
     .map((a) => ({ acc: a, m: calcMetrics(ins[a.id]) }))
+    .filter(({ acc, m }) => {
+      const query = search.trim().toLocaleLowerCase("es");
+      return (!query || acc.name.toLocaleLowerCase("es").includes(query) || acc.id.includes(query))
+        && (currencyFilter === "ALL" || acc.currency === currencyFilter)
+        && (!hideZero || (m?.spend ?? 0) > 0);
+    })
     .sort((x, y) => {
       const dir = sort.dir === "asc" ? 1 : -1;
       if (sort.key === "name") return x.acc.name.localeCompare(y.acc.name, "es") * dir;
       const vx = (x.m as Record<string, number | null> | null)?.[sort.key] ?? -Infinity;
       const vy = (y.m as Record<string, number | null> | null)?.[sort.key] ?? -Infinity;
       return ((vx as number) - (vy as number)) * dir;
-    });
+    }), [accounts, ins, search, currencyFilter, hideZero, sort]);
 
   const arrow = (k: string) => (sort.key === k ? (sort.dir === "asc" ? " ▲" : " ▼") : "");
   const sh = (k: string, label: string) => (
@@ -426,6 +436,25 @@ export default function DashboardView() {
         </div>
       )}
 
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 rounded-md border px-3 py-2">
+          <Search className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          <input aria-label="Buscar cuenta por nombre o ID" placeholder="Buscar cuenta por nombre o ID…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-64 bg-transparent text-xs outline-none" />
+        </label>
+        <Select value={currencyFilter} onValueChange={(value) => value && setCurrencyFilter(value)}>
+          <SelectTrigger className="w-40 text-xs" aria-label="Filtrar por moneda"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">Todas las monedas</SelectItem>
+            {currencies.map((currency) => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <label className="flex items-center gap-2 text-xs">
+          <input type="checkbox" checked={hideZero} onChange={(e) => setHideZero(e.target.checked)} />
+          Ocultar sin gasto
+        </label>
+        <span className="text-xs text-muted-foreground">{rows.length} de {accounts.length} cuentas · los totales incluyen todas las cuentas</span>
+      </div>
+
       {/* Por cuenta */}
       <div className="rounded-lg border overflow-x-auto">
         <Table>
@@ -439,6 +468,8 @@ export default function DashboardView() {
           <TableBody>
             {loading && rows.every((r) => !r.m) ? (
               Array.from({ length: 6 }).map((_, i) => <TableRow key={i}><TableCell colSpan={showArchived ? 10 : 9} className="py-2"><Skeleton className="h-6 w-full" /></TableCell></TableRow>)
+            ) : rows.length === 0 ? (
+              <TableRow><TableCell colSpan={showArchived ? 10 : 9} className="py-6 text-center text-sm text-muted-foreground">No hay cuentas que coincidan con los filtros.</TableCell></TableRow>
             ) : rows.map(({ acc, m }) => {
               const profit = m?.profit ?? 0;
               const rawId = acc.id.replace("act_", "");
