@@ -27,6 +27,7 @@ import {
   CopyPlus,
   LayoutTemplate,
   Palette,
+  type LucideIcon,
 } from "lucide-react";
 import {
   Sidebar,
@@ -58,6 +59,15 @@ interface NavItem {
   /** Sección dentro del módulo, para el permiso fino. */
   scope?: string;
 }
+
+const GROUP_ACCENT: Record<string, string> = {
+  META: "text-blue-500 dark:text-blue-400",
+  AUTOMATIONS: "text-amber-500 dark:text-amber-400",
+  LINKS: "text-emerald-500 dark:text-emerald-400",
+  MONITOR: "text-violet-500 dark:text-violet-400",
+  CLONER: "text-pink-500 dark:text-pink-400",
+  ADMIN: "text-slate-500 dark:text-slate-400",
+};
 
 const NAV_GROUPS: { label: string; module: Module; items: NavItem[] }[] = [
   {
@@ -151,61 +161,73 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
 
   return (
     <Sidebar>
-      <SidebarHeader className="border-b border-sidebar-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Zap className="h-5 w-5 text-primary" />
-          <span className="font-semibold text-sm">Winners</span>
+      <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
+        <div className="flex items-center gap-2.5">
+          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shadow-sm">
+            <Zap className="h-4 w-4 text-white" />
+          </div>
+          <div>
+            <span className="font-bold text-sm tracking-tight">Winners</span>
+            <span className="block text-[10px] text-muted-foreground leading-none mt-0.5">Platform</span>
+          </div>
         </div>
       </SidebarHeader>
 
       <SidebarContent>
-        {groups.map((group) => (
-          <SidebarGroup key={group.module}>
-            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {group.items.map((item) => (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      render={<Link href={item.href} />}
-                      isActive={
-                        pathname === item.href ||
-                        // Las entradas que además son prefijo de otras marcarían
-                        // "activo" estando en una hija: /cloner con /cloner/tokens.
-                        (item.href !== "/automations" &&
-                          item.href !== "/links" &&
-                          item.href !== "/cloner" &&
-                          pathname.startsWith(`${item.href}/`))
-                      }
-                      className="flex items-center gap-2"
-                    >
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+        {groups.map((group) => {
+          const accent = GROUP_ACCENT[group.module] ?? "text-muted-foreground";
+          return (
+            <SidebarGroup key={group.module}>
+              <SidebarGroupLabel className="text-[10px] uppercase tracking-widest font-semibold opacity-60">
+                {group.label}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {group.items.map((item) => {
+                    const active =
+                      pathname === item.href ||
+                      (item.href !== "/automations" &&
+                        item.href !== "/links" &&
+                        item.href !== "/cloner" &&
+                        pathname.startsWith(`${item.href}/`));
+                    return (
+                      <SidebarMenuItem key={item.href}>
+                        <SidebarMenuButton
+                          render={<Link href={item.href} />}
+                          isActive={active}
+                          className="flex items-center gap-2.5 transition-all duration-150"
+                        >
+                          <div className={`h-6 w-6 rounded-md flex items-center justify-center transition-colors ${active ? "bg-primary/15 dark:bg-primary/25" : "bg-muted/60 dark:bg-white/[0.06]"}`}>
+                            <item.icon className={`h-3.5 w-3.5 ${active ? "text-primary" : accent}`} />
+                          </div>
+                          <span className={active ? "font-medium" : ""}>{item.label}</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })}
 
         <SidebarGroup>
-          <SidebarGroupLabel>Otras apps</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-[10px] uppercase tracking-widest font-semibold opacity-60">
+            Otras apps
+          </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {APPS_EXTERNAS.map((app) => (
                 <SidebarMenuItem key={app.href}>
                   <SidebarMenuButton
-                    render={
-                      // En una pestaña nueva: si estás a media configuración de
-                      // una clonación, salir de la página la perdería.
-                      <a href={app.href} target="_blank" rel="noreferrer noopener" />
-                    }
-                    className="flex items-center gap-2"
+                    render={<a href={app.href} target="_blank" rel="noreferrer noopener" />}
+                    className="flex items-center gap-2.5"
                   >
-                    <app.icon className="h-4 w-4" />
+                    <div className="h-6 w-6 rounded-md bg-muted/60 dark:bg-white/[0.06] flex items-center justify-center">
+                      <app.icon className="h-3.5 w-3.5 text-pink-500 dark:text-pink-400" />
+                    </div>
                     <span>{app.label}</span>
-                    <ExternalLink className="ml-auto h-3 w-3 text-muted-foreground" />
+                    <ExternalLink className="ml-auto h-3 w-3 text-muted-foreground/50" />
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
@@ -216,19 +238,24 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
 
       <SidebarFooter className="border-t border-sidebar-border p-3">
         <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-xs font-medium">{userName ?? userEmail}</p>
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              {role === "OWNER" && <ShieldCheck className="h-3 w-3" />}
-              {ROLE_LABEL[role]}
-            </p>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 dark:from-primary/30 dark:to-primary/10 flex items-center justify-center shrink-0">
+              <span className="text-xs font-bold text-primary">{(userName ?? userEmail ?? "U")[0].toUpperCase()}</span>
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium">{userName ?? userEmail}</p>
+              <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                {role === "OWNER" && <ShieldCheck className="h-2.5 w-2.5" />}
+                {ROLE_LABEL[role]}
+              </p>
+            </div>
           </div>
           <button
             onClick={() => signOut({ callbackUrl: "/login" })}
-            className="text-muted-foreground transition-colors hover:text-foreground"
+            className="h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground hover:bg-muted/80"
             title="Cerrar sesión"
           >
-            <LogOut className="h-4 w-4" />
+            <LogOut className="h-3.5 w-3.5" />
           </button>
         </div>
       </SidebarFooter>
