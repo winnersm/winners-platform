@@ -564,7 +564,7 @@ export async function getCampaigns(
   if (cached) return JSON.parse(cached);
 
   const { token } = await getActiveToken(bmId, operationId);
-  const fields = "id,name,status,objective,buying_type,daily_budget,lifetime_budget,budget_remaining,start_time,stop_time,special_ad_categories";
+  const fields = "id,name,status,effective_status,objective,buying_type,daily_budget,lifetime_budget,budget_remaining,start_time,stop_time,special_ad_categories";
   const params: Record<string, string> = { fields, limit: "50" };
   if (cursor) params.after = cursor;
 

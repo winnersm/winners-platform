@@ -14,7 +14,7 @@ export async function GET(req: Request) {
 
   try {
     const result = await getCampaigns(accountId, undefined, bmId);
-    const active = (result.campaigns || []).filter(c => c.status === "ACTIVE");
+    const active = (result.campaigns || []).filter(c => (c as any).effective_status === "ACTIVE");
     return NextResponse.json({
       active: active.length,
       campaigns: active.map(c => c.name),
