@@ -319,13 +319,19 @@ export default function DashboardView() {
     </TableHead>
   );
 
-  const Card = ({ label, value, tone, icon: Icon, accent }: { label: string; value: string; tone?: "pos" | "neg"; icon: LucideIcon; accent: string }) => (
-    <div className="relative rounded-xl border bg-white p-4 overflow-hidden">
-      <div className={`absolute top-3 right-3 h-8 w-8 rounded-lg ${accent} flex items-center justify-center`}>
-        <Icon className="h-4 w-4 text-white" />
+  const Card = ({ label, value, tone, icon: Icon, accent, blob }: { label: string; value: string; tone?: "pos" | "neg"; icon: LucideIcon; accent: string; blob: string }) => (
+    <div className="relative rounded-xl border border-white/20 dark:border-white/10 p-4 overflow-hidden backdrop-blur-md bg-white/60 dark:bg-white/[0.06] shadow-sm">
+      <div className={`absolute -top-4 -right-4 h-20 w-20 rounded-full ${blob} opacity-30 blur-2xl`} style={{ animation: "blob-drift 8s ease-in-out infinite" }} />
+      <div className={`absolute -bottom-6 -left-6 h-16 w-16 rounded-full ${blob} opacity-20 blur-2xl`} style={{ animation: "blob-drift-2 10s ease-in-out infinite" }} />
+      <div className="relative z-10">
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
+          <div className={`h-7 w-7 rounded-lg ${accent} flex items-center justify-center shadow-sm`}>
+            <Icon className="h-3.5 w-3.5 text-white" />
+          </div>
+        </div>
+        <div className={`text-xl font-bold ${tone === "pos" ? "text-green-600 dark:text-green-400" : tone === "neg" ? "text-red-600 dark:text-red-400" : ""}`}>{value}</div>
       </div>
-      <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
-      <div className={`text-xl font-bold mt-1 ${tone === "pos" ? "text-green-600" : tone === "neg" ? "text-red-600" : ""}`}>{value}</div>
     </div>
   );
 
@@ -401,12 +407,12 @@ export default function DashboardView() {
                   <div className="text-xs font-medium text-muted-foreground ml-0.5">{currency}</div>
                 )}
                 <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-                  <Card label={`Gasto ${currency}`} value={fmtMoney(t.spend)} icon={DollarSign} accent="bg-blue-500" />
-                  <Card label={`Revenue ${currency}`} value={fmtMoney(t.revenue)} icon={ArrowUpRight} accent="bg-emerald-500" />
-                  <Card label={`Profit ${currency}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} icon={profit >= 0 ? ArrowUpRight : ArrowDownRight} accent={profit >= 0 ? "bg-green-500" : "bg-red-500"} />
-                  <Card label="ROI" value={fmtPct(roi)} tone={(roi ?? 0) > 0 ? "pos" : (roi ?? 0) < 0 ? "neg" : undefined} icon={Percent} accent={(roi ?? 0) >= 0 ? "bg-violet-500" : "bg-red-500"} />
-                  <Card label={`Ventas ${currency}`} value={fmtInt(t.sales)} icon={ShoppingCart} accent="bg-amber-500" />
-                  <Card label="CPA" value={t.sales > 0 ? fmtMoney(t.spend / t.sales) : "—"} icon={Target} accent="bg-sky-500" />
+                  <Card label={`Gasto ${currency}`} value={fmtMoney(t.spend)} icon={DollarSign} accent="bg-blue-500" blob="bg-blue-400" />
+                  <Card label={`Revenue ${currency}`} value={fmtMoney(t.revenue)} icon={ArrowUpRight} accent="bg-emerald-500" blob="bg-emerald-400" />
+                  <Card label={`Profit ${currency}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} icon={profit >= 0 ? ArrowUpRight : ArrowDownRight} accent={profit >= 0 ? "bg-green-500" : "bg-red-500"} blob={profit >= 0 ? "bg-green-400" : "bg-red-400"} />
+                  <Card label="ROI" value={fmtPct(roi)} tone={(roi ?? 0) > 0 ? "pos" : (roi ?? 0) < 0 ? "neg" : undefined} icon={Percent} accent={(roi ?? 0) >= 0 ? "bg-violet-500" : "bg-red-500"} blob={(roi ?? 0) >= 0 ? "bg-violet-400" : "bg-red-400"} />
+                  <Card label={`Ventas ${currency}`} value={fmtInt(t.sales)} icon={ShoppingCart} accent="bg-amber-500" blob="bg-amber-400" />
+                  <Card label="CPA" value={t.sales > 0 ? fmtMoney(t.spend / t.sales) : "—"} icon={Target} accent="bg-sky-500" blob="bg-sky-400" />
                 </div>
               </div>
             );
