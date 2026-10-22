@@ -250,7 +250,8 @@ export default function DashboardView() {
             <Button variant={showArchived ? "secondary" : "ghost"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowArchived(true)}>Archivadas</Button>
           </div>
           <TrendingUp className={`h-3.5 w-3.5 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
-          <Select value={showCustomRange ? "__custom__" : datePreset} onValueChange={(v) => {
+          <Select value={showCustomRange ? "__custom__" : datePreset} onValueChange={(v: string | null) => {
+            if (!v) return;
             if (v === "__custom__") { setShowCustomRange(true); return; }
             setShowCustomRange(false);
             setDatePreset(v);
