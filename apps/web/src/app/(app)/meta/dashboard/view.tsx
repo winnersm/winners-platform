@@ -250,29 +250,31 @@ export default function DashboardView() {
             <Button variant={showArchived ? "secondary" : "ghost"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowArchived(true)}>Archivadas</Button>
           </div>
           <TrendingUp className={`h-3.5 w-3.5 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
-          <Select value={showCustomRange ? "__custom__" : datePreset} onValueChange={(v: string | null) => {
-            if (!v) return;
-            if (v === "__custom__") { setShowCustomRange(true); return; }
-            setShowCustomRange(false);
-            setDatePreset(v);
-          }}>
-            <SelectTrigger className="h-8 w-28 text-xs bg-white"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {DATE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}
-              <SelectItem value="__custom__" className="text-xs"><span className="flex items-center gap-1"><CalendarDays className="h-3 w-3" />Rango</span></SelectItem>
-            </SelectContent>
-          </Select>
-          {showCustomRange && (
-            <div className="flex items-center gap-1">
-              <input type="date" className="h-8 rounded-md border bg-white px-2 text-xs" value={customFrom}
+          {showCustomRange ? (
+            <div className="flex items-center h-8 rounded-md border bg-white overflow-hidden">
+              <button className="px-2 text-muted-foreground hover:text-foreground hover:bg-muted/50 h-full transition-colors" onClick={() => { setShowCustomRange(false); setDatePreset("last_7d"); }} title="Volver a presets">
+                <CalendarDays className="h-3.5 w-3.5" />
+              </button>
+              <input type="date" className="h-full border-l px-2 text-xs bg-transparent outline-none w-[120px]" value={customFrom}
                 onChange={(e) => { setCustomFrom(e.target.value); localStorage.setItem("dashboard_customFrom", e.target.value); }} />
-              <span className="text-xs text-muted-foreground">→</span>
-              <input type="date" className="h-8 rounded-md border bg-white px-2 text-xs" value={customTo}
+              <span className="text-[10px] text-muted-foreground px-1">—</span>
+              <input type="date" className="h-full px-2 text-xs bg-transparent outline-none w-[120px]" value={customTo}
                 onChange={(e) => { setCustomTo(e.target.value); localStorage.setItem("dashboard_customTo", e.target.value); }} />
-              <Button size="sm" className="h-8 px-2.5 text-xs" disabled={!customFrom || !customTo || customFrom > customTo}
+              <button className="px-2.5 h-full text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
+                disabled={!customFrom || !customTo || customFrom > customTo}
                 onClick={() => setDatePreset(`custom:${customFrom}:${customTo}`)}>
-                Aplicar
-              </Button>
+                Ir
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              <Select value={datePreset} onValueChange={(v: string | null) => v && setDatePreset(v)}>
+                <SelectTrigger className="h-8 w-28 text-xs bg-white"><SelectValue /></SelectTrigger>
+                <SelectContent>{DATE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
+              </Select>
+              <button className="h-8 w-8 rounded-md border bg-white flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors" onClick={() => setShowCustomRange(true)} title="Seleccionar rango de fechas">
+                <CalendarDays className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
           <Button size="sm" className="h-8 px-2.5 text-xs" onClick={syncWithMeta} disabled={syncing || loading} title="Trae datos frescos desde Meta y actualiza los snapshots">
