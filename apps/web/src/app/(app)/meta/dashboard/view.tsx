@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays } from "lucide-react";
+import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,120 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { calcMetrics, fmtMoney, fmtInt, fmtPct, type Insights } from "@/lib/metrics";
+
+const DAYS_ES = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
+const MONTHS_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+function pad(n: number) { return n.toString().padStart(2, "0"); }
+function toStr(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+
+function RangeCalendar({ onSelect, onClose, initialFrom, initialTo }: {
+  onSelect: (from: string, to: string) => void;
+  onClose: () => void;
+  initialFrom?: string;
+  initialTo?: string;
+}) {
+  const today = new Date();
+  const [viewMonth, setViewMonth] = useState(initialFrom ? new Date(initialFrom + "T00:00:00").getMonth() : today.getMonth());
+  const [viewYear, setViewYear] = useState(initialFrom ? new Date(initialFrom + "T00:00:00").getFullYear() : today.getFullYear());
+  const [rangeStart, setRangeStart] = useState<string | null>(initialFrom || null);
+  const [rangeEnd, setRangeEnd] = useState<string | null>(initialTo || null);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  const prevMonth = () => {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(viewYear - 1); }
+    else setViewMonth(viewMonth - 1);
+  };
+  const nextMonth = () => {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(viewYear + 1); }
+    else setViewMonth(viewMonth + 1);
+  };
+
+  const firstDay = new Date(viewYear, viewMonth, 1);
+  let startWeekday = firstDay.getDay() - 1;
+  if (startWeekday < 0) startWeekday = 6;
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const todayStr = toStr(today);
+
+  const handleClick = (day: number) => {
+    const clicked = `${viewYear}-${pad(viewMonth + 1)}-${pad(day)}`;
+    if (!rangeStart || (rangeStart && rangeEnd)) {
+      setRangeStart(clicked);
+      setRangeEnd(null);
+    } else {
+      let from = rangeStart, to = clicked;
+      if (from > to) [from, to] = [to, from];
+      setRangeStart(from);
+      setRangeEnd(to);
+      onSelect(from, to);
+    }
+  };
+
+  const effectiveEnd = rangeEnd || hovered;
+  let hlFrom = rangeStart, hlTo = effectiveEnd;
+  if (hlFrom && hlTo && hlFrom > hlTo) [hlFrom, hlTo] = [hlTo, hlFrom];
+
+  return (
+    <div ref={ref} className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg border shadow-lg p-3 w-[280px] select-none">
+      <div className="flex items-center justify-between mb-2">
+        <button className="p-1 rounded hover:bg-muted transition-colors" onClick={prevMonth}><ChevronLeft className="h-4 w-4" /></button>
+        <span className="text-xs font-semibold">{MONTHS_ES[viewMonth]} {viewYear}</span>
+        <button className="p-1 rounded hover:bg-muted transition-colors" onClick={nextMonth}><ChevronRight className="h-4 w-4" /></button>
+      </div>
+      <div className="grid grid-cols-7 gap-0">
+        {DAYS_ES.map((d) => <div key={d} className="text-[10px] font-medium text-muted-foreground text-center py-1">{d}</div>)}
+        {cells.map((day, i) => {
+          if (day === null) return <div key={`e${i}`} />;
+          const ds = `${viewYear}-${pad(viewMonth + 1)}-${pad(day)}`;
+          const isToday = ds === todayStr;
+          const isStart = ds === hlFrom;
+          const isEnd = ds === hlTo;
+          const inRange = hlFrom && hlTo && ds > hlFrom && ds < hlTo;
+          const isSelected = isStart || isEnd;
+          return (
+            <button
+              key={ds}
+              className={`h-8 w-full text-xs relative transition-colors
+                ${isSelected ? "bg-primary text-primary-foreground font-semibold rounded" : ""}
+                ${inRange ? "bg-primary/10" : ""}
+                ${!isSelected && !inRange ? "hover:bg-muted rounded" : ""}
+                ${isToday && !isSelected ? "font-bold text-primary" : ""}
+                ${isStart && !isEnd ? "rounded-l" : ""}
+                ${isEnd && !isStart ? "rounded-r" : ""}
+                ${isStart && isEnd ? "rounded" : ""}
+                ${ds > todayStr ? "text-muted-foreground/40" : ""}
+              `}
+              onClick={() => handleClick(day)}
+              onMouseEnter={() => { if (rangeStart && !rangeEnd) setHovered(ds); }}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+      {rangeStart && !rangeEnd && (
+        <div className="text-[10px] text-muted-foreground text-center mt-2">Selecciona la fecha final</div>
+      )}
+      {rangeStart && rangeEnd && (
+        <div className="text-[10px] text-center mt-2 text-primary font-medium">{rangeStart} → {rangeEnd}</div>
+      )}
+    </div>
+  );
+}
 
 interface Acct { id: string; name: string; account_status: number; bmId: string; currency: string; removedFromBmAt?: string | null; lastSeenInBmAt?: string | null }
 
@@ -72,7 +186,7 @@ export default function DashboardView() {
     if (typeof window !== "undefined") return localStorage.getItem("dashboard_customTo") ?? "";
     return "";
   });
-  const [showCustomRange, setShowCustomRange] = useState(() => datePreset.startsWith("custom:"));
+  const [showCalendar, setShowCalendar] = useState(false);
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -231,33 +345,40 @@ export default function DashboardView() {
             <Button variant={showArchived ? "secondary" : "ghost"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowArchived(true)}>Archivadas</Button>
           </div>
           <TrendingUp className={`h-3.5 w-3.5 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
-          {showCustomRange ? (
-            <div className="flex items-center h-8 rounded-md border bg-white overflow-hidden">
-              <button className="px-2 text-muted-foreground hover:text-foreground hover:bg-muted/50 h-full transition-colors" onClick={() => { setShowCustomRange(false); setDatePreset("last_7d"); }} title="Volver a presets">
-                <CalendarDays className="h-3.5 w-3.5" />
-              </button>
-              <input type="date" className="h-full border-l px-2 text-xs bg-transparent outline-none w-[120px]" value={customFrom}
-                onChange={(e) => { setCustomFrom(e.target.value); localStorage.setItem("dashboard_customFrom", e.target.value); }} />
-              <span className="text-[10px] text-muted-foreground px-1">—</span>
-              <input type="date" className="h-full px-2 text-xs bg-transparent outline-none w-[120px]" value={customTo}
-                onChange={(e) => { setCustomTo(e.target.value); localStorage.setItem("dashboard_customTo", e.target.value); }} />
-              <button className="px-2.5 h-full text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
-                disabled={!customFrom || !customTo || customFrom > customTo}
-                onClick={() => setDatePreset(`custom:${customFrom}:${customTo}`)}>
-                Ir
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1">
+            {datePreset.startsWith("custom:") ? (
+              <div className="flex items-center h-8 rounded-md border bg-white overflow-hidden text-xs">
+                <span className="px-2.5 text-muted-foreground">{customFrom} — {customTo}</span>
+                <button className="px-2 h-full border-l text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" onClick={() => setDatePreset("last_7d")} title="Volver a presets">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ) : (
               <Select value={datePreset} onValueChange={(v: string | null) => v && setDatePreset(v)}>
                 <SelectTrigger className="h-8 w-28 text-xs bg-white"><SelectValue /></SelectTrigger>
                 <SelectContent>{DATE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
               </Select>
-              <button className="h-8 w-8 rounded-md border bg-white flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors" onClick={() => setShowCustomRange(true)} title="Seleccionar rango de fechas">
+            )}
+            <div className="relative">
+              <button className={`h-8 w-8 rounded-md border bg-white flex items-center justify-center transition-colors ${showCalendar ? "text-primary border-primary" : "text-muted-foreground hover:text-foreground hover:border-foreground/30"}`} onClick={() => setShowCalendar(!showCalendar)} title="Seleccionar rango de fechas">
                 <CalendarDays className="h-3.5 w-3.5" />
               </button>
+              {showCalendar && (
+                <RangeCalendar
+                  initialFrom={customFrom || undefined}
+                  initialTo={customTo || undefined}
+                  onClose={() => setShowCalendar(false)}
+                  onSelect={(from, to) => {
+                    setCustomFrom(from); setCustomTo(to);
+                    localStorage.setItem("dashboard_customFrom", from);
+                    localStorage.setItem("dashboard_customTo", to);
+                    setDatePreset(`custom:${from}:${to}`);
+                    setShowCalendar(false);
+                  }}
+                />
+              )}
             </div>
-          )}
+          </div>
           <Button size="sm" className="h-8 px-2.5 text-xs" onClick={syncWithMeta} disabled={syncing || loading} title="Trae datos frescos desde Meta y actualiza los snapshots">
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Sincronizando…" : "Sincronizar con Meta"}
