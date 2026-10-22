@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, X, DollarSign, ArrowUpRight, ArrowDownRight, Percent, ShoppingCart, Target, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -319,8 +319,11 @@ export default function DashboardView() {
     </TableHead>
   );
 
-  const Card = ({ label, value, tone }: { label: string; value: string; tone?: "pos" | "neg" }) => (
-    <div className="rounded-xl border bg-white p-4">
+  const Card = ({ label, value, tone, icon: Icon, accent }: { label: string; value: string; tone?: "pos" | "neg"; icon: LucideIcon; accent: string }) => (
+    <div className="relative rounded-xl border bg-white p-4 overflow-hidden">
+      <div className={`absolute top-3 right-3 h-8 w-8 rounded-lg ${accent} flex items-center justify-center`}>
+        <Icon className="h-4 w-4 text-white" />
+      </div>
       <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
       <div className={`text-xl font-bold mt-1 ${tone === "pos" ? "text-green-600" : tone === "neg" ? "text-red-600" : ""}`}>{value}</div>
     </div>
@@ -398,12 +401,12 @@ export default function DashboardView() {
                   <div className="text-xs font-medium text-muted-foreground ml-0.5">{currency}</div>
                 )}
                 <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-                  <Card label={`Gasto ${currency}`} value={fmtMoney(t.spend)} />
-                  <Card label={`Revenue ${currency}`} value={fmtMoney(t.revenue)} />
-                  <Card label={`Profit ${currency}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} />
-                  <Card label="ROI" value={fmtPct(roi)} tone={(roi ?? 0) > 0 ? "pos" : (roi ?? 0) < 0 ? "neg" : undefined} />
-                  <Card label={`Ventas ${currency}`} value={fmtInt(t.sales)} />
-                  <Card label="CPA" value={t.sales > 0 ? fmtMoney(t.spend / t.sales) : "—"} />
+                  <Card label={`Gasto ${currency}`} value={fmtMoney(t.spend)} icon={DollarSign} accent="bg-blue-500" />
+                  <Card label={`Revenue ${currency}`} value={fmtMoney(t.revenue)} icon={ArrowUpRight} accent="bg-emerald-500" />
+                  <Card label={`Profit ${currency}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} icon={profit >= 0 ? ArrowUpRight : ArrowDownRight} accent={profit >= 0 ? "bg-green-500" : "bg-red-500"} />
+                  <Card label="ROI" value={fmtPct(roi)} tone={(roi ?? 0) > 0 ? "pos" : (roi ?? 0) < 0 ? "neg" : undefined} icon={Percent} accent={(roi ?? 0) >= 0 ? "bg-violet-500" : "bg-red-500"} />
+                  <Card label={`Ventas ${currency}`} value={fmtInt(t.sales)} icon={ShoppingCart} accent="bg-amber-500" />
+                  <Card label="CPA" value={t.sales > 0 ? fmtMoney(t.spend / t.sales) : "—"} icon={Target} accent="bg-sky-500" />
                 </div>
               </div>
             );
