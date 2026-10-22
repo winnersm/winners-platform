@@ -186,8 +186,8 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
           const accentObj = GROUP_ACCENT[group.module] ?? { text: "text-muted-foreground", iconGlow: "", barGlow: "", bgGradient: "", barGradient: "" } as AccentStyle;
           const accent = accentObj.text;
           return (
-            <SidebarGroup key={group.module}>
-              <SidebarGroupLabel className="text-[10px] uppercase tracking-widest font-semibold opacity-60">
+            <SidebarGroup key={group.module} className="py-1.5">
+              <SidebarGroupLabel className="text-[11px] uppercase tracking-widest font-semibold opacity-70">
                 {group.label}
               </SidebarGroupLabel>
               <SidebarGroupContent>
@@ -210,14 +210,14 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
                         <SidebarMenuButton
                           render={<Link href={item.href} />}
                           isActive={active}
-                          className={`flex items-center gap-3 px-3.5 py-2.5 transition-all duration-200 ${active ? "rounded-r-xl font-medium" : ""}`}
+                          className={`h-10 items-center gap-3 px-3.5 py-1.5 text-[15px] transition-all duration-200 ${active ? "rounded-r-xl font-semibold" : ""}`}
                           style={active ? { background: accentObj.bgGradient } : undefined}
                         >
                           <div
-                            className={`h-6 w-6 rounded-md flex items-center justify-center transition-all ${active ? "" : "bg-muted/60 dark:bg-white/[0.06]"}`}
+                            className={`h-7 w-7 rounded-md flex items-center justify-center transition-all ${active ? "" : "bg-muted/60 dark:bg-white/[0.06]"}`}
                           >
                             <item.icon
-                              className={`h-3.5 w-3.5 ${accent}`}
+                              className={`h-4 w-4 ${accent}`}
                               style={active ? { filter: accentObj.iconGlow } : undefined}
                             />
                           </div>
@@ -232,8 +232,8 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
           );
         })}
 
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-[10px] uppercase tracking-widest font-semibold opacity-60">
+        <SidebarGroup className="py-1.5">
+          <SidebarGroupLabel className="text-[11px] uppercase tracking-widest font-semibold opacity-70">
             Otras apps
           </SidebarGroupLabel>
           <SidebarGroupContent>
@@ -242,10 +242,10 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
                 <SidebarMenuItem key={app.href}>
                   <SidebarMenuButton
                     render={<a href={app.href} target="_blank" rel="noreferrer noopener" />}
-                    className="flex items-center gap-2.5"
+                    className="h-10 items-center gap-2.5 px-3.5 py-1.5 text-[15px]"
                   >
-                    <div className="h-6 w-6 rounded-md bg-muted/60 dark:bg-white/[0.06] flex items-center justify-center">
-                      <app.icon className="h-3.5 w-3.5 text-pink-500 dark:text-pink-400" />
+                    <div className="h-7 w-7 rounded-md bg-muted/60 dark:bg-white/[0.06] flex items-center justify-center">
+                      <app.icon className="h-4 w-4 text-pink-500 dark:text-pink-400" />
                     </div>
                     <span>{app.label}</span>
                     <ExternalLink className="ml-auto h-3 w-3 text-muted-foreground/50" />
