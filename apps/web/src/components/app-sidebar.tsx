@@ -210,11 +210,11 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
                         <SidebarMenuButton
                           render={<Link href={item.href} />}
                           isActive={active}
-                          className={`h-10 items-center gap-3 px-3.5 py-1.5 text-[15px] transition-all duration-200 ${active ? "rounded-r-xl font-semibold" : ""}`}
+                          className={`h-10 items-center gap-3 px-3.5 py-1.5 text-[15px] transition-[color,background-color,border-radius] duration-150 ease-out ${active ? "rounded-r-xl font-semibold" : ""}`}
                           style={active ? { background: accentObj.bgGradient } : undefined}
                         >
                           <div
-                            className={`h-7 w-7 rounded-md flex items-center justify-center transition-all ${active ? "" : "bg-muted/60 dark:bg-white/[0.06]"}`}
+                            className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors duration-150 ${active ? "" : "bg-muted/60 dark:bg-white/[0.06]"}`}
                           >
                             <item.icon
                               className={`h-4 w-4 ${accent}`}
