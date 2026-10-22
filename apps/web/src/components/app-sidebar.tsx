@@ -60,13 +60,13 @@ interface NavItem {
   scope?: string;
 }
 
-const GROUP_ACCENT: Record<string, { text: string; activeBg: string }> = {
-  META: { text: "text-blue-500 dark:text-blue-400", activeBg: "bg-blue-500/15 dark:bg-blue-400/15" },
-  AUTOMATIONS: { text: "text-amber-500 dark:text-amber-400", activeBg: "bg-amber-500/15 dark:bg-amber-400/15" },
-  LINKS: { text: "text-emerald-500 dark:text-emerald-400", activeBg: "bg-emerald-500/15 dark:bg-emerald-400/15" },
-  MONITOR: { text: "text-violet-500 dark:text-violet-400", activeBg: "bg-violet-500/15 dark:bg-violet-400/15" },
-  CLONER: { text: "text-pink-500 dark:text-pink-400", activeBg: "bg-pink-500/15 dark:bg-pink-400/15" },
-  ADMIN: { text: "text-slate-500 dark:text-slate-400", activeBg: "bg-slate-500/15 dark:bg-slate-400/15" },
+const GROUP_ACCENT: Record<string, { text: string; activeBg: string; glow: string; gradient: string }> = {
+  META: { text: "text-blue-500 dark:text-blue-400", activeBg: "bg-blue-500/15 dark:bg-blue-400/15", glow: "0 0 12px rgba(59,130,246,0.4)", gradient: "from-blue-500 to-blue-400" },
+  AUTOMATIONS: { text: "text-amber-500 dark:text-amber-400", activeBg: "bg-amber-500/15 dark:bg-amber-400/15", glow: "0 0 12px rgba(245,158,11,0.4)", gradient: "from-amber-500 to-amber-400" },
+  LINKS: { text: "text-emerald-500 dark:text-emerald-400", activeBg: "bg-emerald-500/15 dark:bg-emerald-400/15", glow: "0 0 12px rgba(16,185,129,0.4)", gradient: "from-emerald-500 to-emerald-400" },
+  MONITOR: { text: "text-violet-500 dark:text-violet-400", activeBg: "bg-violet-500/15 dark:bg-violet-400/15", glow: "0 0 12px rgba(139,92,246,0.4)", gradient: "from-violet-500 to-violet-400" },
+  CLONER: { text: "text-pink-500 dark:text-pink-400", activeBg: "bg-pink-500/15 dark:bg-pink-400/15", glow: "0 0 12px rgba(236,72,153,0.4)", gradient: "from-pink-500 to-pink-400" },
+  ADMIN: { text: "text-slate-500 dark:text-slate-400", activeBg: "bg-slate-500/15 dark:bg-slate-400/15", glow: "0 0 12px rgba(100,116,139,0.35)", gradient: "from-slate-500 to-slate-400" },
 };
 
 const NAV_GROUPS: { label: string; module: Module; items: NavItem[] }[] = [
@@ -192,13 +192,19 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
                         item.href !== "/cloner" &&
                         pathname.startsWith(`${item.href}/`));
                     return (
-                      <SidebarMenuItem key={item.href}>
+                      <SidebarMenuItem key={item.href} className="relative">
+                        {active && (
+                          <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-gradient-to-b ${accentObj.gradient}`} />
+                        )}
                         <SidebarMenuButton
                           render={<Link href={item.href} />}
                           isActive={active}
                           className="flex items-center gap-2.5 transition-all duration-150"
                         >
-                          <div className={`h-6 w-6 rounded-md flex items-center justify-center transition-colors ${active ? accentObj.activeBg : "bg-muted/60 dark:bg-white/[0.06]"}`}>
+                          <div
+                            className={`h-6 w-6 rounded-md flex items-center justify-center transition-all ${active ? accentObj.activeBg : "bg-muted/60 dark:bg-white/[0.06]"}`}
+                            style={active ? { boxShadow: accentObj.glow } : undefined}
+                          >
                             <item.icon className={`h-3.5 w-3.5 ${accent}`} />
                           </div>
                           <span className={active ? "font-medium" : ""}>{item.label}</span>
