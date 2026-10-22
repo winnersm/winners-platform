@@ -60,13 +60,21 @@ interface NavItem {
   scope?: string;
 }
 
-const GROUP_ACCENT: Record<string, { text: string; activeBg: string; glow: string; glowOuter: string; textGlow: string; gradient: string }> = {
-  META: { text: "text-blue-500 dark:text-blue-400", activeBg: "bg-blue-500/15 dark:bg-blue-400/15", glow: "inset 0 0 12px rgba(59,130,246,0.15)", glowOuter: "0 0 20px rgba(59,130,246,0.3), 0 0 40px rgba(59,130,246,0.1)", textGlow: "0 0 8px rgba(59,130,246,0.5), 0 0 20px rgba(59,130,246,0.2)", gradient: "from-blue-500 to-blue-400" },
-  AUTOMATIONS: { text: "text-amber-500 dark:text-amber-400", activeBg: "bg-amber-500/15 dark:bg-amber-400/15", glow: "inset 0 0 12px rgba(245,158,11,0.15)", glowOuter: "0 0 20px rgba(245,158,11,0.3), 0 0 40px rgba(245,158,11,0.1)", textGlow: "0 0 8px rgba(245,158,11,0.5), 0 0 20px rgba(245,158,11,0.2)", gradient: "from-amber-500 to-amber-400" },
-  LINKS: { text: "text-emerald-500 dark:text-emerald-400", activeBg: "bg-emerald-500/15 dark:bg-emerald-400/15", glow: "inset 0 0 12px rgba(16,185,129,0.15)", glowOuter: "0 0 20px rgba(16,185,129,0.3), 0 0 40px rgba(16,185,129,0.1)", textGlow: "0 0 8px rgba(16,185,129,0.5), 0 0 20px rgba(16,185,129,0.2)", gradient: "from-emerald-500 to-emerald-400" },
-  MONITOR: { text: "text-violet-500 dark:text-violet-400", activeBg: "bg-violet-500/15 dark:bg-violet-400/15", glow: "inset 0 0 12px rgba(139,92,246,0.15)", glowOuter: "0 0 20px rgba(139,92,246,0.3), 0 0 40px rgba(139,92,246,0.1)", textGlow: "0 0 8px rgba(139,92,246,0.5), 0 0 20px rgba(139,92,246,0.2)", gradient: "from-violet-500 to-violet-400" },
-  CLONER: { text: "text-pink-500 dark:text-pink-400", activeBg: "bg-pink-500/15 dark:bg-pink-400/15", glow: "inset 0 0 12px rgba(236,72,153,0.15)", glowOuter: "0 0 20px rgba(236,72,153,0.3), 0 0 40px rgba(236,72,153,0.1)", textGlow: "0 0 8px rgba(236,72,153,0.5), 0 0 20px rgba(236,72,153,0.2)", gradient: "from-pink-500 to-pink-400" },
-  ADMIN: { text: "text-slate-500 dark:text-slate-400", activeBg: "bg-slate-500/15 dark:bg-slate-400/15", glow: "inset 0 0 12px rgba(100,116,139,0.12)", glowOuter: "0 0 20px rgba(100,116,139,0.25), 0 0 40px rgba(100,116,139,0.08)", textGlow: "0 0 8px rgba(100,116,139,0.4), 0 0 20px rgba(100,116,139,0.15)", gradient: "from-slate-500 to-slate-400" },
+interface AccentStyle {
+  text: string;
+  iconGlow: string;
+  barGlow: string;
+  bgGradient: string;
+  barGradient: string;
+}
+
+const GROUP_ACCENT: Record<string, AccentStyle> = {
+  META: { text: "text-blue-500 dark:text-blue-400", iconGlow: "drop-shadow(0 0 8px rgba(96,165,250,0.7))", barGlow: "0 0 10px 1.5px rgba(59,130,246,0.65)", bgGradient: "linear-gradient(90deg, rgba(37,99,235,0.22) 0%, rgba(37,99,235,0.04) 55%, transparent 100%)", barGradient: "linear-gradient(180deg, #60a5fa, #6366f1)" },
+  AUTOMATIONS: { text: "text-amber-500 dark:text-amber-400", iconGlow: "drop-shadow(0 0 8px rgba(245,158,11,0.7))", barGlow: "0 0 10px 1.5px rgba(245,158,11,0.65)", bgGradient: "linear-gradient(90deg, rgba(245,158,11,0.22) 0%, rgba(245,158,11,0.04) 55%, transparent 100%)", barGradient: "linear-gradient(180deg, #fbbf24, #f59e0b)" },
+  LINKS: { text: "text-emerald-500 dark:text-emerald-400", iconGlow: "drop-shadow(0 0 8px rgba(16,185,129,0.7))", barGlow: "0 0 10px 1.5px rgba(16,185,129,0.65)", bgGradient: "linear-gradient(90deg, rgba(16,185,129,0.22) 0%, rgba(16,185,129,0.04) 55%, transparent 100%)", barGradient: "linear-gradient(180deg, #34d399, #10b981)" },
+  MONITOR: { text: "text-violet-500 dark:text-violet-400", iconGlow: "drop-shadow(0 0 8px rgba(139,92,246,0.7))", barGlow: "0 0 10px 1.5px rgba(139,92,246,0.65)", bgGradient: "linear-gradient(90deg, rgba(139,92,246,0.22) 0%, rgba(139,92,246,0.04) 55%, transparent 100%)", barGradient: "linear-gradient(180deg, #a78bfa, #7c3aed)" },
+  CLONER: { text: "text-pink-500 dark:text-pink-400", iconGlow: "drop-shadow(0 0 8px rgba(236,72,153,0.7))", barGlow: "0 0 10px 1.5px rgba(236,72,153,0.65)", bgGradient: "linear-gradient(90deg, rgba(236,72,153,0.22) 0%, rgba(236,72,153,0.04) 55%, transparent 100%)", barGradient: "linear-gradient(180deg, #f472b6, #ec4899)" },
+  ADMIN: { text: "text-slate-500 dark:text-slate-400", iconGlow: "drop-shadow(0 0 8px rgba(100,116,139,0.6))", barGlow: "0 0 10px 1.5px rgba(100,116,139,0.5)", bgGradient: "linear-gradient(90deg, rgba(100,116,139,0.18) 0%, rgba(100,116,139,0.03) 55%, transparent 100%)", barGradient: "linear-gradient(180deg, #94a3b8, #64748b)" },
 };
 
 const NAV_GROUPS: { label: string; module: Module; items: NavItem[] }[] = [
@@ -175,7 +183,7 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
 
       <SidebarContent>
         {groups.map((group) => {
-          const accentObj = GROUP_ACCENT[group.module] ?? { text: "text-muted-foreground", activeBg: "bg-muted/60" };
+          const accentObj = GROUP_ACCENT[group.module] ?? { text: "text-muted-foreground", iconGlow: "", barGlow: "", bgGradient: "", barGradient: "" } as AccentStyle;
           const accent = accentObj.text;
           return (
             <SidebarGroup key={group.module}>
@@ -194,20 +202,26 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
                     return (
                       <SidebarMenuItem key={item.href} className="relative">
                         {active && (
-                          <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-gradient-to-b ${accentObj.gradient}`} />
+                          <div
+                            className="absolute left-0 top-1.5 bottom-1.5 w-[3.5px] rounded-r-full"
+                            style={{ background: accentObj.barGradient, boxShadow: accentObj.barGlow }}
+                          />
                         )}
                         <SidebarMenuButton
                           render={<Link href={item.href} />}
                           isActive={active}
-                          className={`flex items-center gap-2.5 transition-all duration-200 ${active ? "rounded-md" : ""}`}
-                          style={active ? { boxShadow: `${accentObj.glow}, ${accentObj.glowOuter}` } : undefined}
+                          className={`flex items-center gap-3 px-3.5 py-2.5 transition-all duration-200 ${active ? "rounded-r-xl font-medium" : ""}`}
+                          style={active ? { background: accentObj.bgGradient } : undefined}
                         >
                           <div
-                            className={`h-6 w-6 rounded-md flex items-center justify-center transition-all ${active ? accentObj.activeBg : "bg-muted/60 dark:bg-white/[0.06]"}`}
+                            className={`h-6 w-6 rounded-md flex items-center justify-center transition-all ${active ? "" : "bg-muted/60 dark:bg-white/[0.06]"}`}
                           >
-                            <item.icon className={`h-3.5 w-3.5 ${accent}`} />
+                            <item.icon
+                              className={`h-3.5 w-3.5 ${accent}`}
+                              style={active ? { filter: accentObj.iconGlow } : undefined}
+                            />
                           </div>
-                          <span className={active ? "font-medium" : ""} style={active ? { textShadow: accentObj.textGlow } : undefined}>{item.label}</span>
+                          <span style={active ? { textShadow: "0 0 8px rgba(255,255,255,0.2)" } : undefined}>{item.label}</span>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
                     );
