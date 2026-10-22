@@ -158,6 +158,7 @@ export default function DashboardView() {
     const load = async () => {
       const map: Record<string, CampaignData> = {};
       for (const a of accounts) {
+        if (a.account_status !== 1) continue;
         try {
           const r = await fetch(`/api/dashboard/active-campaigns?accountId=${a.id.replace("act_", "")}&bmId=${a.bmId}`).then(r => r.json());
           if (r.active > 0) map[a.id] = r;
