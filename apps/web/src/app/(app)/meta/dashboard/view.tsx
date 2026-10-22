@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, RefreshCw, TrendingUp } from "lucide-react";
+import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -58,7 +58,23 @@ export default function DashboardView() {
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [done, setDone] = useState(0);
-  const [datePreset, setDatePreset] = useState("last_7d");
+  const [datePreset, setDatePresetRaw] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("dashboard_datePreset") ?? "last_7d";
+    return "last_7d";
+  });
+  const setDatePreset = useCallback((v: string) => {
+    setDatePresetRaw(v);
+    localStorage.setItem("dashboard_datePreset", v);
+  }, []);
+  const [customFrom, setCustomFrom] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("dashboard_customFrom") ?? "";
+    return "";
+  });
+  const [customTo, setCustomTo] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("dashboard_customTo") ?? "";
+    return "";
+  });
+  const [showCustomRange, setShowCustomRange] = useState(() => datePreset.startsWith("custom:"));
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -234,10 +250,30 @@ export default function DashboardView() {
             <Button variant={showArchived ? "secondary" : "ghost"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowArchived(true)}>Archivadas</Button>
           </div>
           <TrendingUp className={`h-3.5 w-3.5 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
-          <Select value={datePreset} onValueChange={(v) => v && setDatePreset(v)}>
+          <Select value={showCustomRange ? "__custom__" : datePreset} onValueChange={(v) => {
+            if (v === "__custom__") { setShowCustomRange(true); return; }
+            setShowCustomRange(false);
+            setDatePreset(v);
+          }}>
             <SelectTrigger className="h-8 w-28 text-xs bg-white"><SelectValue /></SelectTrigger>
-            <SelectContent>{DATE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
+            <SelectContent>
+              {DATE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}
+              <SelectItem value="__custom__" className="text-xs"><span className="flex items-center gap-1"><CalendarDays className="h-3 w-3" />Rango</span></SelectItem>
+            </SelectContent>
           </Select>
+          {showCustomRange && (
+            <div className="flex items-center gap-1">
+              <input type="date" className="h-8 rounded-md border bg-white px-2 text-xs" value={customFrom}
+                onChange={(e) => { setCustomFrom(e.target.value); localStorage.setItem("dashboard_customFrom", e.target.value); }} />
+              <span className="text-xs text-muted-foreground">→</span>
+              <input type="date" className="h-8 rounded-md border bg-white px-2 text-xs" value={customTo}
+                onChange={(e) => { setCustomTo(e.target.value); localStorage.setItem("dashboard_customTo", e.target.value); }} />
+              <Button size="sm" className="h-8 px-2.5 text-xs" disabled={!customFrom || !customTo || customFrom > customTo}
+                onClick={() => setDatePreset(`custom:${customFrom}:${customTo}`)}>
+                Aplicar
+              </Button>
+            </div>
+          )}
           <Button size="sm" className="h-8 px-2.5 text-xs" onClick={syncWithMeta} disabled={syncing || loading} title="Trae datos frescos desde Meta y actualiza los snapshots">
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Sincronizando…" : "Sincronizar con Meta"}
@@ -309,7 +345,7 @@ export default function DashboardView() {
                           {st.label}
                         </span>
                       )}
-                      {campaigns[acc.id] && (m?.spend ?? 0) > 0 && (
+                      {campaigns[acc.id] && (
                         <span className="shrink-0 rounded bg-blue-50 text-blue-600 px-1.5 py-[1px] text-[9px] font-semibold" title={campaigns[acc.id].campaigns.join(", ")}>
                           {campaigns[acc.id].active} activa{campaigns[acc.id].active !== 1 ? "s" : ""}
                         </span>

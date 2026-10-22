@@ -615,7 +615,7 @@ export async function getAdSets(
   if (cached) return JSON.parse(cached);
 
   const { token } = await getActiveToken(bmId, operationId);
-  const fields = "id,name,status,campaign_id,daily_budget,lifetime_budget,optimization_goal,start_time,end_time";
+  const fields = "id,name,status,effective_status,campaign_id,daily_budget,lifetime_budget,optimization_goal,start_time,end_time";
   const endpoint = campaignId ? `${campaignId}/adsets` : `act_${accountId}/adsets`;
   try {
     const json = await metaGet(endpoint, token, { fields, limit: "200" });
@@ -788,14 +788,15 @@ export async function getAccountInsights(
 
       let urlParams: Record<string, string> = { fields, access_token: token };
 
-      // Para "today": usar time_range en la zona horaria de la operación, no UTC
-      if (datePreset === "today" && operationId) {
+      if (datePreset.startsWith("custom:")) {
+        const [, since, until] = datePreset.split(":");
+        urlParams.time_range = JSON.stringify({ since, until });
+      } else if (datePreset === "today" && operationId) {
         const op = await prisma.operation.findUnique({
           where: { id: operationId },
           select: { timezone: true }
         });
         if (op?.timezone) {
-          // Calcular el rango de "hoy" en la timezone de la operación
           const now = new Date();
           const formatter = new Intl.DateTimeFormat('sv-SE', {
             year: 'numeric',
@@ -804,7 +805,6 @@ export async function getAccountInsights(
             timeZone: op.timezone,
           });
           const today = formatter.format(now);
-          console.log(`[meta-api] getAccountInsights("today") para op ${operationId}: usando timezone ${op.timezone}, hoy=${today}`);
           urlParams.time_range = JSON.stringify({ since: today, until: today });
         } else {
           urlParams.date_preset = datePreset;

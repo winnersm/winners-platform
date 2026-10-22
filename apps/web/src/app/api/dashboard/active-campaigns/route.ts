@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getCampaigns } from "@/lib/meta-api";
+import { getCampaigns, getAdSets } from "@/lib/meta-api";
 
 export async function GET(req: Request) {
   const session = await auth();
@@ -13,11 +13,19 @@ export async function GET(req: Request) {
   if (!accountId) return NextResponse.json({ active: 0, campaigns: [] });
 
   try {
-    const result = await getCampaigns(accountId, undefined, bmId);
-    const active = (result.campaigns || []).filter(c => (c as any).effective_status === "ACTIVE");
+    const result = await getCampaigns(accountId, undefined, bmId || undefined);
+    const activeCampaigns = (result.campaigns || []).filter(c => (c as any).effective_status === "ACTIVE");
+
+    const delivering: string[] = [];
+    for (const c of activeCampaigns) {
+      const adsets = await getAdSets(accountId, c.id, bmId || undefined);
+      const hasActiveAdset = adsets.some((a: any) => a.effective_status === "ACTIVE");
+      if (hasActiveAdset) delivering.push(c.name);
+    }
+
     return NextResponse.json({
-      active: active.length,
-      campaigns: active.map(c => c.name),
+      active: delivering.length,
+      campaigns: delivering,
     });
   } catch {
     return NextResponse.json({ active: 0, campaigns: [] });
