@@ -309,7 +309,7 @@ export default function DashboardView() {
                           {st.label}
                         </span>
                       )}
-                      {campaigns[acc.id] && (
+                      {campaigns[acc.id] && (m?.spend ?? 0) > 0 && (
                         <span className="shrink-0 rounded bg-blue-50 text-blue-600 px-1.5 py-[1px] text-[9px] font-semibold" title={campaigns[acc.id].campaigns.join(", ")}>
                           {campaigns[acc.id].active} activa{campaigns[acc.id].active !== 1 ? "s" : ""}
                         </span>
