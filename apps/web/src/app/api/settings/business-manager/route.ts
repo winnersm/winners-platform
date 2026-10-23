@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@winners/db";
 import { encrypt } from "@/lib/crypto";
-import { verifyToken } from "@/lib/meta-api";
+import { verifyToken, invalidateAccountsCache } from "@/lib/meta-api";
 import { requireActiveOperationId, getActiveOperationId } from "@/lib/operation";
 import { z } from "zod";
 import { assertGrant, ForbiddenError } from "@/lib/guards";
@@ -124,6 +124,9 @@ export async function POST(req: NextRequest) {
         data: { name: displayName, bmIdMeta, systemUserId: systemUser.id, encryptedToken, tokenLast4, status: "active", operationId: op },
       });
 
+  // Sin argumento: la clave real es meta:accounts:{op}:{bm}, el patrón por bm no casa.
+  await invalidateAccountsCache();
+
   await prisma.auditLog.create({
     data: {
       module: "META",
@@ -190,6 +193,7 @@ export async function PUT(req: NextRequest) {
   }
 
   const updated = await prisma.businessManager.update({ where: { id }, data });
+  if (token) await invalidateAccountsCache();
 
   await prisma.auditLog.create({
     data: {
