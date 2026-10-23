@@ -33,6 +33,7 @@ export async function getActiveToken(bmId?: string, operationId?: string): Promi
   const bm = await prisma.businessManager.findFirst({
     where: {
       status: "active",
+      deletedAt: null, // un BM en la papelera no debe seguir operando
       ...(bmId ? { id: bmId } : {}),
       ...(operationId ? { operationId } : {}),
     },
@@ -493,6 +494,7 @@ export async function getAdAccounts(bmId?: string, operationId?: string, skipCac
   const activeBMs = await prisma.businessManager.findMany({
     where: {
       status: "active",
+      deletedAt: null, // un BM en la papelera no debe seguir operando
       ...(bmId ? { id: bmId } : {}),
       ...(operationId ? { operationId } : {}),
     },
