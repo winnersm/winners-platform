@@ -10,6 +10,7 @@ interface BM {
   bmIdMeta: string;
   systemUserId: string;
   status: string;
+  tokenLast4?: string | null;
   updatedAt: Date;
   deletedAt?: Date | null;
   deletedByName?: string | null;

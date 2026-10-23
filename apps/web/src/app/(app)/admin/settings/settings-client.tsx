@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { Plus, Trash2, CheckCircle, XCircle, RefreshCw, RotateCcw, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, CheckCircle, XCircle, RefreshCw, RotateCcw, AlertTriangle, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +22,7 @@ interface BM {
   bmIdMeta: string;
   systemUserId: string;
   status: string;
+  tokenLast4?: string | null;
   updatedAt: Date | string;
   deletedAt?: Date | string | null;
   deletedByName?: string | null;
@@ -63,9 +64,50 @@ export function SettingsClient({
   const [reason, setReason] = useState("");
   const [deleting, setDeleting] = useState(false);
 
+  // Editar nombre/token sin borrar y volver a crear.
+  const [toEdit, setToEdit] = useState<BM | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editToken, setEditToken] = useState("");
+  const [editing, setEditing] = useState(false);
+
   const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
   });
+
+  function openEdit(bm: BM) {
+    setToEdit(bm);
+    setEditName(bm.name);
+    setEditToken("");
+  }
+
+  async function confirmEdit() {
+    if (!toEdit) return;
+    const name = editName.trim();
+    const token = editToken.trim();
+    if (!name) { toast.error("El nombre no puede quedar vacío"); return; }
+    if (token && token.length < 10) { toast.error("El token parece incompleto"); return; }
+    const payload: { name?: string; token?: string } = {};
+    if (name !== toEdit.name) payload.name = name;
+    if (token) payload.token = token;
+    if (!payload.name && !payload.token) { setToEdit(null); return; }
+    setEditing(true);
+    try {
+      const res = await fetch(`/api/settings/business-manager?id=${toEdit.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(json.error ?? "Error al actualizar"); return; }
+      toast.success(payload.token ? `Token de "${json.name}" actualizado` : `"${json.name}" actualizado`);
+      setToEdit(null);
+      await refresh();
+    } catch {
+      toast.error("No se pudo conectar con el servidor");
+    } finally {
+      setEditing(false);
+    }
+  }
 
   async function refresh() {
     const [a, t] = await Promise.all([
@@ -84,12 +126,18 @@ export function SettingsClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      const json = await res.json();
+      // Si el servidor falla con HTML, res.json() lanzaría y no se vería ningún aviso.
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) { toast.error(json.error ?? "Error al guardar"); return; }
-      toast.success(`Business Manager "${json.name}" configurado`);
+      toast.success(json.restored
+        ? `"${json.name}" estaba en la papelera: se restauró con el nuevo token`
+        : `Business Manager "${json.name}" configurado`);
       reset();
       setOpen(false);
+      setTab("activos");
       await refresh();
+    } catch {
+      toast.error("No se pudo conectar con el servidor");
     } finally {
       setSaving(false);
     }
@@ -207,17 +255,27 @@ export function SettingsClient({
                       <CardTitle className="text-base">{bm.name}</CardTitle>
                       <StatusBadge status={bm.status} />
                     </div>
-                    <Button
-                      variant="ghost" size="sm"
-                      onClick={() => { setToDelete(bm); setReason(""); }}
-                      className="text-destructive hover:text-destructive"
-                      title="Mover a la papelera"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <div className="flex items-center">
+                      <Button
+                        variant="ghost" size="sm"
+                        onClick={() => openEdit(bm)}
+                        title="Editar nombre o token"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="sm"
+                        onClick={() => { setToDelete(bm); setReason(""); }}
+                        className="text-destructive hover:text-destructive"
+                        title="Mover a la papelera"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                   <CardDescription className="text-xs">
-                    BM ID: {bm.bmIdMeta} · System User: {bm.systemUserId} · Actualizado: {fmtDate(bm.updatedAt)}
+                    BM ID: {bm.bmIdMeta} · System User: {bm.systemUserId}
+                    {bm.tokenLast4 ? ` · Token: …${bm.tokenLast4}` : ""} · Actualizado: {fmtDate(bm.updatedAt)}
                   </CardDescription>
                 </CardHeader>
               </Card>
@@ -264,6 +322,42 @@ export function SettingsClient({
           ))}
         </div>
       )}
+
+      {/* Editar: nombre y/o token; el token vacío conserva el actual */}
+      <Dialog open={!!toEdit} onOpenChange={(o) => { if (!o) setToEdit(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Business Manager</DialogTitle>
+            <DialogDescription>
+              BM ID {toEdit?.bmIdMeta}. El nuevo token se verifica contra Meta antes de guardarse.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-name">Nombre</Label>
+              <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-token">Nuevo token de System User</Label>
+              <Input
+                id="edit-token" type="text" autoComplete="off" placeholder="EAA..."
+                value={editToken} onChange={(e) => setEditToken(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Déjalo vacío para conservar el token actual
+                {toEdit?.tokenLast4 ? ` (…${toEdit.tokenLast4})` : ""}.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setToEdit(null)}>Cancelar</Button>
+            <Button onClick={confirmEdit} disabled={editing}>
+              {editing ? <RefreshCw className="h-4 w-4 mr-1 animate-spin" /> : null}
+              {editing ? "Verificando..." : "Guardar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Eliminar: el motivo es obligatorio */}
       <Dialog open={!!toDelete} onOpenChange={(o) => { if (!o) { setToDelete(null); setReason(""); } }}>

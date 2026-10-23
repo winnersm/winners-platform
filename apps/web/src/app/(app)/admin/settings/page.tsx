@@ -14,7 +14,7 @@ export default async function SettingsPage() {
     prisma.businessManager.findMany({
       where: { ...(op ? { operationId: op } : {}), deletedAt: null },
       orderBy: { createdAt: "asc" },
-      select: { id: true, name: true, bmIdMeta: true, systemUserId: true, status: true, updatedAt: true },
+      select: { id: true, name: true, bmIdMeta: true, systemUserId: true, status: true, tokenLast4: true, updatedAt: true },
     }),
     prisma.businessManager.findMany({
       where: { ...(op ? { operationId: op } : {}), deletedAt: { not: null } },
