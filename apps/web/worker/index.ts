@@ -1,14 +1,15 @@
 if (process.env.NODE_ENV !== "production") {
   require("dotenv/config");
 }
-import { Worker, type Job as BullJob } from "bullmq";
-import { prisma } from "@winners/db";
-import { duplicateCampaign, duplicateAdsets, duplicateAds } from "@/lib/meta-api";
+import { Worker, DelayedError, type Job as BullJob } from "bullmq";
+import { prisma, Prisma } from "@winners/db";
+import { duplicateCampaign, duplicateAdsets, duplicateAds, getAccountCooldown, setAccountCooldown, FatalAdError } from "@/lib/meta-api";
+import { MetaApiError, isRateLimitKind, serializeError, userLine } from "@/lib/meta-errors";
 import { createPBIA, syncActiveAds, syncAllFanpages } from "@/lib/fanpages-api";
 import { syncAllDashboards } from "@/lib/dashboard-sync";
 import { syncAllListings, syncListingsForAccount } from "@/lib/listing-sync";
 import { syncAllSpendDaily } from "@/lib/spend-history";
-import { duplicationsQueue, JOB_TYPES } from "@/lib/queue";
+import { duplicationsQueue, syncQueue, SYNC_JOB_NAMES, JOB_TYPES } from "@/lib/queue";
 
 const connection = {
   url: process.env.REDIS_URL ?? "redis://localhost:6379",
@@ -17,40 +18,32 @@ const connection = {
 type LogEntry = { ts: string; msg: string };
 
 // ─── Límite de concurrencia POR CUENTA ──────────────────────────────────────
-// Global: hasta WORKER_CONCURRENCY jobs a la vez. Pero de la MISMA ad account
-// solo PER_ACCOUNT_MAX simultáneos (protege contra el rate limit 17 por cuenta).
+// Global: hasta WORKER_CONCURRENCY jobs a la vez. De la MISMA ad account solo
+// PER_ACCOUNT_MAX simultáneos (protege contra el rate limit por cuenta).
+// Si la cuenta está ocupada o enfriándose, el job NO se queda esperando dentro
+// del worker (eso bloqueaba un hueco y frenaba a las demás cuentas): se
+// reprograma unos segundos más tarde y el hueco queda libre para otro trabajo.
 const WORKER_CONCURRENCY = 5;
 const PER_ACCOUNT_MAX = 2;
+const ACCOUNT_BUSY_DELAY_MS = 15_000;
 const accountActive = new Map<string, number>();
-const accountWaiters = new Map<string, Array<() => void>>();
 
-async function acquireAccount(accountId?: string): Promise<void> {
-  if (!accountId) return;
+function tryAcquireAccount(accountId?: string): boolean {
+  if (!accountId) return true;
   const cur = accountActive.get(accountId) ?? 0;
-  if (cur < PER_ACCOUNT_MAX) {
-    accountActive.set(accountId, cur + 1);
-    return;
-  }
-  // Cupo lleno para esta cuenta → esperar a que se libere un turno.
-  await new Promise<void>((resolve) => {
-    const q = accountWaiters.get(accountId) ?? [];
-    q.push(resolve);
-    accountWaiters.set(accountId, q);
-  });
-  // El slot se transfiere directo desde releaseAccount → no incrementamos aquí.
+  if (cur >= PER_ACCOUNT_MAX) return false;
+  accountActive.set(accountId, cur + 1);
+  return true;
 }
 
 function releaseAccount(accountId?: string): void {
   if (!accountId) return;
-  const q = accountWaiters.get(accountId);
-  if (q && q.length) {
-    const next = q.shift()!;
-    next(); // transferir el slot al siguiente en espera (sin tocar el contador)
-  } else {
-    const cur = accountActive.get(accountId) ?? 1;
-    accountActive.set(accountId, Math.max(0, cur - 1));
-  }
+  const cur = accountActive.get(accountId) ?? 1;
+  accountActive.set(accountId, Math.max(0, cur - 1));
 }
+
+/** Tipos que se pueden reanudar sin duplicar nada (tienen punto de control). */
+const RESUMABLE = new Set<string>([JOB_TYPES.DUPLICATE_CAMPAIGN]);
 
 // Marca de cancelación: el catch la distingue de un fallo real para no pisar el estado "cancelled".
 class CancelledError extends Error {
@@ -73,54 +66,87 @@ async function writeLog(
   });
 }
 
-async function processJob(bullJob: BullJob) {
+// Jobs de sistema (sin fila en DB): sincronización de snapshots.
+async function processSyncJob(bullJob: BullJob) {
+  console.log(`[worker:sync] Job ${bullJob.id} tipo ${bullJob.name}`);
+  switch (bullJob.name) {
+    case JOB_TYPES.SYNC_DASHBOARD:
+      console.log("[worker] SYNC_DASHBOARD: sincronizando dashboards de todas las operaciones...");
+      return syncAllDashboards();
+    case JOB_TYPES.SYNC_LISTINGS:
+      console.log("[worker] SYNC_LISTINGS: sincronizando listados de todas las operaciones...");
+      return syncAllListings();
+    case JOB_TYPES.SYNC_FANPAGES:
+      console.log("[worker] SYNC_FANPAGES: sincronizando fanpages de todas las operaciones...");
+      return syncAllFanpages();
+    case JOB_TYPES.SYNC_SPEND_DAILY:
+      console.log("[worker] SYNC_SPEND_DAILY: acumulando gasto diario de todas las operaciones...");
+      return syncAllSpendDaily();
+    case JOB_TYPES.SYNC_LISTINGS_ACCOUNT: {
+      const { operationId, accountId, bmId } = bullJob.data as { operationId: string; accountId: string; bmId: string };
+      console.log(`[worker] SYNC_LISTINGS_ACCOUNT: cuenta ${accountId} (op ${operationId})`);
+      return syncListingsForAccount(operationId, { id: accountId, bmId }, undefined, { force: true });
+    }
+  }
+}
+
+/** Deja el job en espera con un motivo visible y lo reprograma. */
+async function postpone(bullJob: BullJob, token: string | undefined, jobId: string, delayMs: number, reason: string) {
+  const until = new Date(Date.now() + delayMs).toISOString();
+  const row = await prisma.metaJob.findUnique({ where: { id: jobId }, select: { output: true } });
+  const prev = (row?.output ?? {}) as Record<string, unknown>;
+  await prisma.metaJob.update({
+    where: { id: jobId },
+    data: { status: "pending", output: { ...prev, waiting: { reason, until } } as Prisma.InputJsonValue },
+  });
+  await bullJob.moveToDelayed(Date.now() + delayMs, token);
+  throw new DelayedError();
+}
+
+async function processJob(bullJob: BullJob, token?: string) {
   console.log(`[worker] Job BullMQ ${bullJob.id} tipo ${bullJob.name}`);
 
-  // Jobs de sistema (sin fila en DB): sincronización de snapshots.
-  if (bullJob.name === "SYNC_DASHBOARD") {
-    console.log("[worker] SYNC_DASHBOARD: sincronizando dashboards de todas las operaciones...");
-    await syncAllDashboards();
-    return;
-  }
-  if (bullJob.name === "SYNC_LISTINGS") {
-    console.log("[worker] SYNC_LISTINGS: sincronizando listados de todas las operaciones...");
-    await syncAllListings();
-    return;
-  }
-  if (bullJob.name === "SYNC_FANPAGES") {
-    console.log("[worker] SYNC_FANPAGES: sincronizando fanpages de todas las operaciones...");
-    await syncAllFanpages();
-    return;
-  }
-  if (bullJob.name === "SYNC_SPEND_DAILY") {
-    console.log("[worker] SYNC_SPEND_DAILY: acumulando gasto diario de todas las operaciones...");
-    await syncAllSpendDaily();
-    return;
-  }
-  if (bullJob.name === "SYNC_LISTINGS_ACCOUNT") {
-    const { operationId, accountId, bmId } = bullJob.data as { operationId: string; accountId: string; bmId: string };
-    console.log(`[worker] SYNC_LISTINGS_ACCOUNT: cuenta ${accountId} (op ${operationId})`);
-    await syncListingsForAccount(operationId, { id: accountId, bmId });
-    return;
-  }
+  // Syncs que quedaron en la cola antigua antes del cambio de cola.
+  if (SYNC_JOB_NAMES.has(bullJob.name)) return processSyncJob(bullJob);
 
   const jobId: string = bullJob.data.jobId;
   const accountId: string | undefined = bullJob.data.accountId;
-  const logs: LogEntry[] = [];
+  const row = await prisma.metaJob.findUnique({ where: { id: jobId }, select: { status: true, logs: true } });
+  if (!row) { console.warn(`[worker] Job ${jobId} ya no existe en DB, se descarta`); return; }
+  if (row.status === "cancelled") { console.log(`[worker] Job ${jobId} cancelado antes de empezar`); return; }
 
-  // Esperar cupo de la cuenta (máx PER_ACCOUNT_MAX de la misma ad account a la vez).
-  await acquireAccount(accountId);
+  // Cuenta enfriándose (Meta pidió esperar o la cuota está alta) → reprogramar.
+  if (accountId) {
+    const cd = await getAccountCooldown(accountId);
+    if (cd.seconds > 0) {
+      const mins = Math.max(1, Math.round(cd.seconds / 60));
+      await postpone(bullJob, token, jobId, cd.seconds * 1000 + 2000 + (bullJob.data.seq ?? 0) * 200,
+        `Meta está limitando esta cuenta (${cd.reason ?? "cuota alta"}). Se reanuda solo en ~${mins} min.`);
+    }
+  }
+  // Cuenta con su cupo lleno → reprogramar sin ocupar un hueco del worker.
+  if (!tryAcquireAccount(accountId)) {
+    await postpone(bullJob, token, jobId, ACCOUNT_BUSY_DELAY_MS + (bullJob.data.seq ?? 0) * 200,
+      `En cola: esta cuenta ya tiene ${PER_ACCOUNT_MAX} trabajos en curso.`);
+  }
+
+  const logs: LogEntry[] = Array.isArray(row.logs) ? (row.logs as LogEntry[]) : [];
   try {
-    await runJob(bullJob, jobId, logs);
+    await runJob(bullJob, jobId, logs, token);
   } finally {
     releaseAccount(accountId);
   }
 }
 
-async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[]) {
+async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[], token?: string) {
+  const current = await prisma.metaJob.findUnique({ where: { id: jobId }, select: { output: true } });
+  const prevOutput = (current?.output ?? {}) as Record<string, unknown>;
+  // Al arrancar se quita la marca de "en espera" (si la había).
+  const { waiting: _waiting, ...outputWithoutWaiting } = prevOutput;
+  void _waiting;
   await prisma.metaJob.update({
     where: { id: jobId },
-    data: { status: "processing", progress: 0 },
+    data: { status: "processing", output: outputWithoutWaiting as Prisma.InputJsonValue },
   });
 
   const cb = async (progress: number, msg: string) => {
@@ -139,8 +165,19 @@ async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[]) {
   try {
     switch (bullJob.name) {
       case "DUPLICATE_CAMPAIGN": {
-        const { campaignId, accountId, name, status, bmId } = bullJob.data;
-        const result = await duplicateCampaign(campaignId, accountId, name, status, bmId, cb, checkCancelled);
+        const { campaignId, accountId, name, status, bmId, operationId } = bullJob.data;
+        const resumeCampaignId = typeof prevOutput.newCampaignId === "string" ? prevOutput.newCampaignId : undefined;
+        const result = await duplicateCampaign(campaignId, accountId, name, status, bmId, cb, checkCancelled, {
+          resumeCampaignId,
+          operationId,
+          // Punto de control: en cuanto existe la copia se guarda, para reanudar sin duplicar.
+          onCheckpoint: async ({ newCampaignId }) => {
+            await prisma.metaJob.update({
+              where: { id: jobId },
+              data: { output: { ...outputWithoutWaiting, newCampaignId } as Prisma.InputJsonValue },
+            });
+          },
+        });
         await prisma.metaJob.update({
           where: { id: jobId },
           data: { status: "completed", progress: 100, output: JSON.parse(JSON.stringify(result)), logs },
@@ -209,16 +246,45 @@ async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[]) {
         throw new Error(`Tipo de job desconocido: ${bullJob.name}`);
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof DelayedError) throw error;
     // Cancelación = no es un fallo: dejar el job en "cancelled" (lo puso la API) sin pisarlo.
-    const cancelled = error instanceof CancelledError;
-    logs.push({ ts: new Date().toISOString(), msg: cancelled ? "Cancelado por el usuario" : `ERROR: ${message}` });
+    if (error instanceof CancelledError) {
+      logs.push({ ts: new Date().toISOString(), msg: "Cancelado por el usuario" });
+      await prisma.metaJob.update({ where: { id: jobId }, data: { status: "cancelled", logs } });
+      throw error;
+    }
+
+    const metaErr = error instanceof FatalAdError ? (error.metaError ?? error) : error;
+    const serialized = serializeError(metaErr);
+    if (error instanceof FatalAdError) serialized.message = error.message;
+
+    // Rate limit largo en un job reanudable → enfriar la cuenta y reprogramar el
+    // job: continuará sobre lo ya creado (punto de control) en vez de fallar.
+    if (metaErr instanceof MetaApiError && isRateLimitKind(metaErr.kind) && RESUMABLE.has(bullJob.name)) {
+      const waitSec = Math.max(60, metaErr.detail.retryAfterSec ?? 0);
+      const accountId: string | undefined = bullJob.data.accountId;
+      if (accountId) await setAccountCooldown(accountId, waitSec, `Meta limitó la cuenta (código ${metaErr.detail.code})`);
+      logs.push({ ts: new Date().toISOString(), msg: `PAUSA: ${serialized.title}. Se reanuda en ~${Math.ceil(waitSec / 60)} min sin repetir lo ya creado.` });
+      await prisma.metaJob.update({ where: { id: jobId }, data: { logs } });
+      await postpone(bullJob, token, jobId, waitSec * 1000, `${serialized.title}. Se reanuda solo en ~${Math.ceil(waitSec / 60)} min.`);
+    }
+
+    const d = serialized.detail;
+    const tech = [d.code != null ? `código ${d.code}${d.subcode != null ? `/${d.subcode}` : ""}` : null, d.endpoint, d.fbtraceId ? `fbtrace ${d.fbtraceId}` : null]
+      .filter(Boolean).join(" · ");
+    logs.push({ ts: new Date().toISOString(), msg: `ERROR: ${serialized.title} — ${serialized.message}${tech ? ` [${tech}]` : ""}` });
+    const row = await prisma.metaJob.findUnique({ where: { id: jobId }, select: { output: true } });
+    const out = (row?.output ?? {}) as Record<string, unknown>;
     await prisma.metaJob.update({
       where: { id: jobId },
-      data: cancelled
-        ? { status: "cancelled", logs }
-        : { status: "failed", error: message, logs },
+      data: {
+        status: "failed",
+        error: userLine(serialized),
+        logs,
+        output: { ...out, error: serialized } as unknown as Prisma.InputJsonValue,
+      },
     });
+    console.error(`[worker:${jobId}] FALLÓ (${serialized.kind}): ${JSON.stringify(serialized.detail)}`);
     throw error;
   }
 }
@@ -228,56 +294,49 @@ const worker = new Worker("duplications", processJob, {
   concurrency: WORKER_CONCURRENCY,
 });
 
-worker.on("completed", (job) => {
-  console.log(`[worker] Job BullMQ ${job.id} completado`);
+// Los syncs van aparte: 2 a la vez como máximo, sin competir con las duplicaciones.
+const syncWorker = new Worker("syncs", processSyncJob, {
+  connection,
+  concurrency: 2,
 });
 
-worker.on("failed", (job, err) => {
-  console.error(`[worker] Job BullMQ ${job?.id} falló:`, err.message);
-});
+for (const [label, w] of [["duplications", worker], ["syncs", syncWorker]] as const) {
+  w.on("completed", (job) => console.log(`[worker:${label}] Job ${job.id} completado`));
+  w.on("failed", (job, err) => console.error(`[worker:${label}] Job ${job?.id} falló:`, err.message));
+  w.on("error", (err) => console.error(`[worker:${label}] Error:`, err));
+}
 
-worker.on("error", (err) => {
-  console.error("[worker] Error:", err);
-});
+console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs' (sincronizaciones).");
 
-console.log("[worker] Listo, esperando jobs en la cola 'duplications'...");
-
-// Programar el sync del dashboard: uno inmediato al arrancar + repetible cada 20 min.
-// El repeatable es idempotente por su clave (no se duplica entre despliegues).
+// Programación de los syncs. upsertJobScheduler es idempotente por id, así que
+// no se duplica entre despliegues. Antes vivían en la cola de duplicaciones:
+// se quitan de ahí para que no corran dos veces.
 (async () => {
   try {
-    await duplicationsQueue.add(JOB_TYPES.SYNC_DASHBOARD, {}, { removeOnComplete: true, removeOnFail: true });
-    await duplicationsQueue.add(
-      JOB_TYPES.SYNC_DASHBOARD, {},
-      { repeat: { every: 20 * 60 * 1000 }, removeOnComplete: true, removeOnFail: true }
-    );
+    for (const sch of await duplicationsQueue.getJobSchedulers()) {
+      if (sch.name && SYNC_JOB_NAMES.has(sch.name)) {
+        await duplicationsQueue.removeJobScheduler(sch.key);
+        console.log(`[worker] Programación antigua de ${sch.name} retirada de 'duplications'`);
+      }
+    }
+    const opts = { removeOnComplete: true, removeOnFail: true };
+    await syncQueue.add(JOB_TYPES.SYNC_DASHBOARD, {}, opts);
+    await syncQueue.upsertJobScheduler("sync-dashboard", { every: 20 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, opts });
     // Listados (campañas/adsets/ads/insights): inmediato + cada 30 min.
-    await duplicationsQueue.add(JOB_TYPES.SYNC_LISTINGS, {}, { removeOnComplete: true, removeOnFail: true });
-    await duplicationsQueue.add(
-      JOB_TYPES.SYNC_LISTINGS, {},
-      { repeat: { every: 30 * 60 * 1000 }, removeOnComplete: true, removeOnFail: true }
-    );
-    // Fanpages: una vez al día a las 5:00 AM (hora Colombia). No lleva pasada
-    // inmediata: las páginas cambian poco y el botón "Sincronizar" cubre lo
-    // urgente. El repeatable es idempotente por su clave (cron + tz).
-    await duplicationsQueue.add(
-      JOB_TYPES.SYNC_FANPAGES, {},
-      { repeat: { pattern: "0 5 * * *", tz: "America/Bogota" }, removeOnComplete: true, removeOnFail: true }
-    );
-    // Gasto diario: una vez al día a las 6:00 AM (hora Colombia). Reescribe una
-    // ventana corta (últimos días) para capturar ajustes tardíos de Meta.
-    await duplicationsQueue.add(
-      JOB_TYPES.SYNC_SPEND_DAILY, {},
-      { repeat: { pattern: "0 6 * * *", tz: "America/Bogota" }, removeOnComplete: true, removeOnFail: true }
-    );
+    await syncQueue.add(JOB_TYPES.SYNC_LISTINGS, {}, opts);
+    await syncQueue.upsertJobScheduler("sync-listings", { every: 30 * 60 * 1000 }, { name: JOB_TYPES.SYNC_LISTINGS, opts });
+    // Fanpages: una vez al día a las 5:00 AM (hora Colombia); el botón "Sincronizar" cubre lo urgente.
+    await syncQueue.upsertJobScheduler("sync-fanpages", { pattern: "0 5 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_FANPAGES, opts });
+    // Gasto diario: 6:00 AM (hora Colombia). Reescribe los últimos días para captar ajustes tardíos de Meta.
+    await syncQueue.upsertJobScheduler("sync-spend-daily", { pattern: "0 6 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_SPEND_DAILY, opts });
     console.log("[worker] Sync programado: dashboard (20 min) + listados (30 min) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
   } catch (e) {
-    console.error("[worker] No se pudo programar el sync de dashboard:", e);
+    console.error("[worker] No se pudo programar los syncs:", e);
   }
 })();
 
 process.on("SIGTERM", async () => {
-  await worker.close();
+  await Promise.all([worker.close(), syncWorker.close()]);
   await prisma.$disconnect();
   process.exit(0);
 });

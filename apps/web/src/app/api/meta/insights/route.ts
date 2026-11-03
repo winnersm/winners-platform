@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getInsights, type MetaInsights } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
-import { readListingSnapshot } from "@/lib/listing-sync";
+import { readSnapshotWithAge } from "@/lib/listing-sync";
+import { errorResponse } from "@/lib/api-error";
+import { serializeError, userLine } from "@/lib/meta-errors";
 
+// Métricas por nivel y periodo. Misma política que /api/meta/campaigns: copia de
+// DB si es reciente; si no, Meta en vivo; refresh=true salta los cachés.
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -21,16 +25,22 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // Servir insights desde DB (por nivel + preset) si hay snapshot.
-    if (op && !refresh) {
-      const snap = await readListingSnapshot<MetaInsights[]>(op, accountId, `ins:${level}`, datePreset);
-      if (snap) return NextResponse.json({ data: snap.data, count: snap.data.length, fromDb: true });
+    const snap = op ? await readSnapshotWithAge<MetaInsights[]>(op, accountId, `ins:${level}`, datePreset) : null;
+    if (snap?.fresh && !refresh) {
+      return NextResponse.json({ data: snap.data, count: snap.data.length, syncedAt: snap.syncedAt, source: "db" });
     }
-    const data = await getInsights(accountId, level, datePreset, bmId, op);
-    return NextResponse.json({ data, count: data.length });
+    try {
+      const data = await getInsights(accountId, level, datePreset, bmId, op, { force: refresh });
+      return NextResponse.json({ data, count: data.length, syncedAt: new Date(), source: "meta" });
+    } catch (e) {
+      if (!snap) throw e;
+      const info = serializeError(e);
+      return NextResponse.json({
+        data: snap.data, count: snap.data.length, syncedAt: snap.syncedAt, source: "db",
+        stale: true, staleReason: userLine(info), errorInfo: info,
+      });
+    }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Error";
-    console.error(`[insights API] level=${level}:`, message);
-    return NextResponse.json({ error: message, data: [] }, { status: 500 });
+    return errorResponse(err, `insights ${level}`, { data: [] });
   }
 }

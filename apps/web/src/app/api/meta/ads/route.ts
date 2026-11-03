@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getAds, type MetaAd } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
-import { readListingSnapshot } from "@/lib/listing-sync";
+import { readSnapshotWithAge } from "@/lib/listing-sync";
+import { errorResponse } from "@/lib/api-error";
+import { serializeError, userLine } from "@/lib/meta-errors";
 
+// Anuncios de una cuenta (o de un ad set). Misma política que /api/meta/campaigns.
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -19,20 +22,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "accountId requerido" }, { status: 400 });
   }
 
+  const pick = (rows: MetaAd[]) => (adsetId ? rows.filter((a) => a.adset_id === adsetId) : rows);
+
   try {
-    // Servir desde DB (todos los ads de la cuenta) filtrando por adset.
-    if (op && !refresh) {
-      const snap = await readListingSnapshot<MetaAd[]>(op, accountId, "ads");
-      if (snap) {
-        const ads = adsetId ? snap.data.filter((a) => a.adset_id === adsetId) : snap.data;
-        return NextResponse.json({ ads, fromDb: true, syncedAt: snap.syncedAt });
-      }
+    const snap = op ? await readSnapshotWithAge<MetaAd[]>(op, accountId, "ads") : null;
+    if (snap?.fresh && !refresh) {
+      return NextResponse.json({ ads: pick(snap.data), syncedAt: snap.syncedAt, source: "db" });
     }
-    const ads = await getAds(accountId, adsetId ?? undefined, bmId, op);
-    return NextResponse.json({ ads });
+    try {
+      const ads = await getAds(accountId, adsetId ?? undefined, bmId, op, { force: refresh });
+      return NextResponse.json({ ads, syncedAt: new Date(), source: "meta" });
+    } catch (e) {
+      if (!snap) throw e;
+      const info = serializeError(e);
+      return NextResponse.json({
+        ads: pick(snap.data), syncedAt: snap.syncedAt, source: "db",
+        stale: true, staleReason: userLine(info), errorInfo: info,
+      });
+    }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    console.error("[ads]", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return errorResponse(err, "ads");
   }
 }

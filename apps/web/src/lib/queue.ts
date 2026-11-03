@@ -33,3 +33,24 @@ export const duplicationsQueue = new Queue("duplications", {
     removeOnFail: { count: 50 },
   },
 });
+
+// Sincronizaciones periódicas (dashboard, listados, fanpages, gasto). Van en su
+// propia cola para que una tanda de duplicaciones no las deje esperando, y al
+// revés: un sync largo no retrasa lo que pidió una persona.
+export const syncQueue = new Queue("syncs", {
+  connection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: "exponential", delay: 30_000 },
+    removeOnComplete: { count: 50 },
+    removeOnFail: { count: 50 },
+  },
+});
+
+export const SYNC_JOB_NAMES = new Set<string>([
+  JOB_TYPES.SYNC_DASHBOARD,
+  JOB_TYPES.SYNC_LISTINGS,
+  JOB_TYPES.SYNC_LISTINGS_ACCOUNT,
+  JOB_TYPES.SYNC_FANPAGES,
+  JOB_TYPES.SYNC_SPEND_DAILY,
+]);

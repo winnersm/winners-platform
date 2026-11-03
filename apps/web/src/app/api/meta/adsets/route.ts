@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getAdSets, type MetaAdSet } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
-import { readListingSnapshot } from "@/lib/listing-sync";
+import { readSnapshotWithAge } from "@/lib/listing-sync";
+import { errorResponse } from "@/lib/api-error";
+import { serializeError, userLine } from "@/lib/meta-errors";
 
+// Ad sets de una cuenta (o de una campaña). Misma política que /api/meta/campaigns:
+// copia de DB si es reciente; si no, Meta en vivo; refresh=true salta los cachés.
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -19,20 +23,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "accountId requerido" }, { status: 400 });
   }
 
+  const pick = (rows: MetaAdSet[]) => (campaignId ? rows.filter((a) => a.campaign_id === campaignId) : rows);
+
   try {
-    // Servir desde DB (todos los adsets de la cuenta) filtrando por campaña.
-    if (op && !refresh) {
-      const snap = await readListingSnapshot<MetaAdSet[]>(op, accountId, "adsets");
-      if (snap) {
-        const adsets = campaignId ? snap.data.filter((a) => a.campaign_id === campaignId) : snap.data;
-        return NextResponse.json({ adsets, fromDb: true, syncedAt: snap.syncedAt });
-      }
+    const snap = op ? await readSnapshotWithAge<MetaAdSet[]>(op, accountId, "adsets") : null;
+    if (snap?.fresh && !refresh) {
+      return NextResponse.json({ adsets: pick(snap.data), syncedAt: snap.syncedAt, source: "db" });
     }
-    const adsets = await getAdSets(accountId, campaignId ?? undefined, bmId, op);
-    return NextResponse.json({ adsets });
+    try {
+      const adsets = await getAdSets(accountId, campaignId ?? undefined, bmId, op, { force: refresh });
+      return NextResponse.json({ adsets, syncedAt: new Date(), source: "meta" });
+    } catch (e) {
+      if (!snap) throw e;
+      const info = serializeError(e);
+      return NextResponse.json({
+        adsets: pick(snap.data), syncedAt: snap.syncedAt, source: "db",
+        stale: true, staleReason: userLine(info), errorInfo: info,
+      });
+    }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    console.error("[adsets]", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return errorResponse(err, "adsets");
   }
 }

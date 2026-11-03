@@ -1,9 +1,19 @@
 import { Prisma } from "@winners/db";
 import { prisma } from "@winners/db";
 import {
-  getAdAccounts, getCampaigns, getAdSets, getAds, getInsights,
+  getAdAccounts, getCampaigns, getAdSets, getAds, getInsights, getAccountCooldown,
   type MetaAdAccount, type MetaCampaign, type MetaAdSet, type MetaAd, type MetaInsights,
 } from "@/lib/meta-api";
+import { serializeError } from "@/lib/meta-errors";
+
+/** Antigüedad a partir de la cual una copia de listado se considera vieja. */
+export const LISTING_MAX_AGE_MS = 45 * 60 * 1000;
+
+// Un fallo de sync no debe romper la pasada, pero sí dejar rastro legible.
+function logSyncError(what: string, accountId: string, e: unknown) {
+  const s = serializeError(e);
+  console.warn(`[listing-sync] ${what} cuenta ${accountId}: ${s.title} (${s.kind}) ${JSON.stringify(s.detail)}`);
+}
 
 export const LISTING_PRESETS = ["today", "last_7d", "last_30d"];
 
@@ -19,6 +29,19 @@ export async function readListingSnapshot<T = unknown>(
   return { data: row.data as T, syncedAt: row.syncedAt };
 }
 
+/**
+ * Lee la copia de un listado y dice si sigue vigente. Las rutas la sirven tal
+ * cual si es reciente; si es vieja, intentan Meta en vivo y solo vuelven a la
+ * copia (marcada como "stale") si Meta falla.
+ */
+export async function readSnapshotWithAge<T = unknown>(
+  operationId: string, accountId: string, kind: string, datePreset = "",
+): Promise<{ data: T; syncedAt: Date; fresh: boolean } | null> {
+  const snap = await readListingSnapshot<T>(operationId, accountId, kind, datePreset);
+  if (!snap) return null;
+  return { ...snap, fresh: Date.now() - snap.syncedAt.getTime() < LISTING_MAX_AGE_MS };
+}
+
 async function upsertSnapshot(operationId: string, accountId: string, kind: string, datePreset: string, data: unknown) {
   const payload = data as unknown as Prisma.InputJsonValue;
   await prisma.listingSnapshot.upsert({
@@ -29,50 +52,63 @@ async function upsertSnapshot(operationId: string, accountId: string, kind: stri
 }
 
 // Sincroniza estructura + insights de UNA cuenta → snapshots en DB.
+// force: saltarse el caché de Redis (lo pide «Traer de Meta»). Sin force, la
+// estructura y los insights de "hoy" se piden frescos igualmente; el resto de
+// presets aprovecha el caché (≤1 h) para no gastar cuota de más.
 export async function syncListingsForAccount(
   operationId: string, account: { id: string; bmId: string }, presets: string[] = LISTING_PRESETS,
-): Promise<void> {
+  opts: { force?: boolean } = {},
+): Promise<{ skipped?: string }> {
   const rawId = account.id.replace("act_", "");
   const bmId = account.bmId;
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  // Cuenta enfriándose por cuota: no insistir (se conserva la copia anterior).
+  const cd = await getAccountCooldown(rawId);
+  if (cd.seconds > 0) {
+    console.log(`[listing-sync] cuenta ${rawId} omitida: ${cd.reason ?? "cuota alta"} (${cd.seconds}s)`);
+    return { skipped: cd.reason ?? "cuota alta" };
+  }
 
   // Campañas: todas (paginando por cursor).
   try {
     const all: MetaCampaign[] = [];
     let cursor: string | undefined = undefined;
     do {
-      const r = await getCampaigns(rawId, cursor, bmId, operationId);
+      const r = await getCampaigns(rawId, cursor, bmId, operationId, { force: true });
       all.push(...r.campaigns);
       cursor = r.nextCursor ?? undefined;
     } while (cursor);
     await upsertSnapshot(operationId, rawId, "campaigns", "", all);
-  } catch { /* conservar snapshot anterior */ }
+  } catch (e) { logSyncError("campañas", rawId, e); /* conservar snapshot anterior */ }
   await wait(200);
 
   // Adsets (todos de la cuenta — traen campaign_id para filtrar por campaña).
   try {
-    const adsets: MetaAdSet[] = await getAdSets(rawId, undefined, bmId, operationId);
+    const adsets: MetaAdSet[] = await getAdSets(rawId, undefined, bmId, operationId, { force: true });
     await upsertSnapshot(operationId, rawId, "adsets", "", adsets);
-  } catch { }
+  } catch (e) { logSyncError("adsets", rawId, e); }
   await wait(200);
 
   // Ads (todos de la cuenta — traen adset_id para filtrar por adset).
   try {
-    const ads: MetaAd[] = await getAds(rawId, undefined, bmId, operationId);
+    const ads: MetaAd[] = await getAds(rawId, undefined, bmId, operationId, { force: true });
     await upsertSnapshot(operationId, rawId, "ads", "", ads);
-  } catch { }
+  } catch (e) { logSyncError("ads", rawId, e); }
   await wait(200);
 
   // Insights por nivel × preset.
   for (const preset of presets) {
     for (const level of ["campaign", "adset", "ad"] as const) {
       try {
-        const ins: MetaInsights[] = await getInsights(rawId, level, preset, bmId, operationId);
+        const force = opts.force || preset === "today";
+        const ins: MetaInsights[] = await getInsights(rawId, level, preset, bmId, operationId, { force });
         await upsertSnapshot(operationId, rawId, `ins:${level}`, preset, ins);
-      } catch { }
+      } catch (e) { logSyncError(`insights ${level}/${preset}`, rawId, e); }
       await wait(200);
     }
   }
+  return {};
 }
 
 // Al cambiar estado de una entidad, reflejarlo en el snapshot para que un reload

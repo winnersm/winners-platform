@@ -4,6 +4,7 @@ import { updateEntityStatus } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
 import { patchListingSnapshotStatus } from "@/lib/listing-sync";
 import { z } from "zod";
+import { errorResponse } from "@/lib/api-error";
 
 const schema = z.object({
   entityId: z.string().min(1),
@@ -30,7 +31,6 @@ export async function POST(req: NextRequest) {
     if (op) await patchListingSnapshotStatus(op, accountId, entityType, entityId, status).catch(() => {});
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Error al cambiar estado";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return errorResponse(err, `status ${entityType} ${entityId}`);
   }
 }
