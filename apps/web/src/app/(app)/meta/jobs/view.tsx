@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { RefreshCw, ChevronDown, ChevronRight, Briefcase, CheckCircle2, XCircle, Clock, Loader2, Ban, Trash2 } from "lucide-react";
+import { RefreshCw, ChevronDown, ChevronRight, Briefcase, CheckCircle2, XCircle, Clock, Loader2, Ban, Trash2, AlertTriangle, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
+import { ErrorDetails, WaitingNote, toastApiError, type ErrorInfo } from "@/components/error-details";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,9 +93,28 @@ function outputSummary(job: Job): string | null {
   if (!job.output) return null;
   const o = job.output;
   const parts: string[] = [];
-  if (typeof o.adsetsCount === "number") parts.push(`${o.adsetsCount} adsets`);
-  if (typeof o.adsCount === "number") parts.push(`${o.adsCount} ads`);
+  const of = (n: unknown, total: unknown) => typeof total === "number" && total !== n ? `${n}/${total}` : `${n}`;
+  if (typeof o.adsetsCount === "number") parts.push(`${of(o.adsetsCount, o.adsetsExpected)} adsets`);
+  if (typeof o.adsCount === "number") parts.push(`${of(o.adsCount, o.adsExpected)} ads`);
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+interface Issue { step: string; name: string; sourceId?: string; error: ErrorInfo }
+const STEP_LABEL: Record<string, string> = { campaign: "Campaña", adset: "Ad set", ad: "Anuncio", status: "Estado" };
+
+function issuesOf(job: Job): Issue[] {
+  const v = job.output?.issues;
+  return Array.isArray(v) ? (v as Issue[]) : [];
+}
+function waitingOf(job: Job): { reason: string; until?: string } | null {
+  const w = job.output?.waiting as { reason?: string; until?: string } | undefined;
+  return w?.reason ? { reason: w.reason, until: w.until } : null;
+}
+function batchOf(job: Job): { id: string; seq: number; total: number } | null {
+  const i = job.input ?? {};
+  return typeof i.batchId === "string" && typeof i.total === "number" && i.total > 1
+    ? { id: i.batchId, seq: Number(i.seq ?? 0), total: i.total }
+    : null;
 }
 
 // ─── Row ──────────────────────────────────────────────────────────────────────
@@ -105,6 +125,21 @@ function JobRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const isActive = job.status === "pending" || job.status === "processing";
   const logs: LogEntry[] = Array.isArray(job.logs) ? job.logs : [];
+  const issues = issuesOf(job);
+  const waiting = job.status === "pending" ? waitingOf(job) : null;
+  const batch = batchOf(job);
+  const newCampaignId = typeof job.output?.newCampaignId === "string" ? job.output.newCampaignId : null;
+  const accountId = typeof job.input?.accountId === "string" ? job.input.accountId : null;
+
+  async function cancelBatch(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!batch || !confirm(`¿Cancelar todo lo pendiente del lote (${batch.total} copias)? Lo ya creado en Meta no se borra.`)) return;
+    const res = await fetch(`/api/jobs?batchId=${batch.id}`, { method: "DELETE" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { toastApiError(json, "No se pudo cancelar el lote"); return; }
+    toast.success(`${json.cancelled ?? 0} trabajo(s) del lote cancelados`);
+    onChanged();
+  }
 
   function openConfirm(e: React.MouseEvent) {
     e.stopPropagation();
@@ -116,7 +151,7 @@ function JobRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
     try {
       const res = await fetch(`/api/jobs/${job.id}`, { method: "DELETE" });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) { toast.error(json.error ?? "Error"); return; }
+      if (!res.ok) { toastApiError(json, "No se pudo completar la acción"); return; }
       toast.success(isActive ? "Trabajo cancelado" : "Trabajo eliminado");
       setConfirmOpen(false);
       onChanged();
@@ -138,6 +173,11 @@ function JobRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-medium text-muted-foreground">{TYPE_LABELS[job.type] ?? job.type}</span>
+            {batch && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0" title={`Lote ${batch.id}`}>
+                {batch.seq}/{batch.total}
+              </Badge>
+            )}
             <span className="text-sm font-semibold truncate">{jobTitle(job)}</span>
           </div>
           <div className="flex items-center gap-3 mt-0.5">
@@ -148,8 +188,14 @@ function JobRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
             {job.status === "completed" && outputSummary(job) && (
               <span className="text-[11px] text-green-700">{outputSummary(job)}</span>
             )}
+            {job.status === "completed" && issues.length > 0 && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
+                <AlertTriangle className="h-3 w-3" /> {issues.length} incidencia{issues.length > 1 ? "s" : ""}
+              </span>
+            )}
+            {waiting && <WaitingNote reason={waiting.reason} until={waiting.until} />}
             {job.status === "failed" && job.error && (
-              <span className="text-[11px] text-red-600 truncate max-w-[300px]">{job.error}</span>
+              <span className="text-[11px] text-red-600 truncate max-w-[420px]" title={job.error}>{job.error}</span>
             )}
           </div>
         </div>
@@ -197,7 +243,48 @@ function JobRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
       </div>
 
       {open && (
-        <div className="border-t px-4 py-3 bg-muted/10">
+        <div className="border-t px-4 py-3 bg-muted/10 space-y-3">
+          {job.status === "failed" && (
+            <ErrorDetails info={job.output?.error as ErrorInfo | undefined} fallback={job.error ?? "El trabajo falló"} />
+          )}
+
+          {issues.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-amber-800">
+                Se completó, pero {issues.length} elemento{issues.length > 1 ? "s" : ""} no se pudo crear:
+              </p>
+              {issues.map((it, i) => (
+                <div key={i} className="space-y-0.5">
+                  <p className="text-[11px] text-muted-foreground">
+                    {STEP_LABEL[it.step] ?? it.step}: <span className="font-medium text-foreground">{it.name}</span>
+                    {it.sourceId ? <span className="font-mono"> · {it.sourceId}</span> : null}
+                  </p>
+                  <ErrorDetails info={it.error} variant="warning" compact />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(newCampaignId || batch) && (
+            <div className="flex items-center gap-3 flex-wrap text-xs">
+              {newCampaignId && accountId && (
+                <a
+                  href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${accountId}&selected_campaign_ids=${newCampaignId}`}
+                  target="_blank" rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ExternalLink className="h-3 w-3" /> Ver copia en Ads Manager
+                </a>
+              )}
+              {batch && isActive && (
+                <button type="button" onClick={cancelBatch} className="inline-flex items-center gap-1 text-red-600 hover:underline">
+                  <Ban className="h-3 w-3" /> Cancelar todo el lote
+                </button>
+              )}
+            </div>
+          )}
+
           {logs.length === 0 ? (
             <p className="text-xs text-muted-foreground italic">Sin logs</p>
           ) : (
@@ -207,14 +294,14 @@ function JobRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
                   <span className="text-muted-foreground/60 shrink-0 tabular-nums">
                     {new Date(l.ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                   </span>
-                  <span className={l.msg.startsWith("ERROR") ? "text-red-600" : "text-foreground"}>{l.msg}</span>
+                  <span className={l.msg.startsWith("ERROR") ? "text-red-600" : l.msg.startsWith("PAUSA") ? "text-amber-700" : "text-foreground"}>{l.msg}</span>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="mt-2 text-[10px] text-muted-foreground/60 font-mono">
-            ID: {job.id}
+          <div className="text-[10px] text-muted-foreground/60 font-mono">
+            ID: {job.id}{batch ? ` · lote ${batch.id}` : ""}
           </div>
         </div>
       )}

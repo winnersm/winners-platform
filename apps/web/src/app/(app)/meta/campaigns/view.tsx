@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback, Suspense, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
-  RefreshCw, AlertCircle, Search, Copy, TrendingUp, Play, Pause, Briefcase, Building2,
+  RefreshCw, Search, Copy, TrendingUp, Play, Pause, Briefcase, Building2,
+  ExternalLink, ChevronRight, X, CloudDownload, Loader2, CheckCircle2, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,7 @@ import {
 import { DuplicateCampaignModal } from "@/components/duplicate-campaign-modal";
 import { DuplicateAdsetsModal } from "@/components/duplicate-adsets-modal";
 import { DuplicateAdsModal } from "@/components/duplicate-ads-modal";
+import { ErrorDetails, errorInfoOf, toastApiError, type ErrorInfo } from "@/components/error-details";
 import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -41,6 +43,10 @@ interface Insights {
 }
 type Level = "campaign" | "adset" | "ad";
 type Selection = { id: string; name: string };
+type EntityStatus = "ACTIVE" | "PAUSED";
+
+/** Cómo llegaron los datos: copia de DB, Meta en vivo, o caché por límite de Meta. */
+interface Freshness { syncedAt: string | null; source: string | null }
 
 // ─── Client-side cache ────────────────────────────────────────────────────────
 const CLIENT_TTL = 5 * 60 * 1000;
@@ -66,11 +72,14 @@ const STATUS_OPTS = [
   { value: "ARCHIVED", label: "Archivados" },
 ];
 
-function fmtBudget(cents?: string) {
+/** Presupuesto en la moneda real de la cuenta (Meta lo da en centavos). */
+function fmtBudget(cents?: string, currency = "USD") {
   if (!cents) return "—";
-  return new Intl.NumberFormat("es-MX", {
-    style: "currency", currency: "USD", minimumFractionDigits: 0,
-  }).format(Number(cents) / 100);
+  try {
+    return new Intl.NumberFormat("es-CO", { style: "currency", currency, maximumFractionDigits: 0 }).format(Number(cents) / 100);
+  } catch {
+    return `${(Number(cents) / 100).toLocaleString("es-CO")} ${currency}`;
+  }
 }
 
 function fmtC(n: number | null): string {
@@ -85,6 +94,36 @@ function fmtI(n: number | null): string {
 }
 function fmtP(n: number | null): string {
   return `${(n ?? 0).toFixed(2)}%`;
+}
+
+/** "hace 3 min", "justo ahora"… */
+function ago(iso: string | null, now: number): string {
+  if (!iso) return "—";
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 45) return "justo ahora";
+  const m = Math.round(s / 60);
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `hace ${h} h`;
+  return `hace ${Math.round(h / 24)} días`;
+}
+
+function adsManagerUrl(level: Level, accountId: string, id: string): string {
+  const tab = level === "campaign" ? "campaigns" : level === "adset" ? "adsets" : "ads";
+  const param = level === "campaign" ? "selected_campaign_ids" : level === "adset" ? "selected_adset_ids" : "selected_ad_ids";
+  return `https://adsmanager.facebook.com/adsmanager/manage/${tab}?act=${accountId}&${param}=${id}`;
+}
+
+/** Ejecuta fn sobre items con como mucho `limit` a la vez (no saturar a Meta). */
+async function runPool<T>(items: T[], limit: number, fn: (t: T) => Promise<void>) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const item = items[i++];
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
 }
 
 // Meta devuelve varios action_types de compra/checkout que SE SOLAPAN (omni_*,
@@ -134,21 +173,6 @@ function calcMetrics(ins: Insights | undefined) {
 
 const ROW_GREEN = "bg-green-50 border-l-4 border-l-green-400 hover:bg-green-100/60";
 const ROW_RED = "bg-red-50 border-l-4 border-l-red-400 hover:bg-red-100/60";
-
-// Traduce errores crudos de Meta a algo accionable para el usuario.
-function friendlyMetaError(msg?: string | null): string | null {
-  if (!msg) return msg ?? null;
-  if (/\berror 17\b|request limit/i.test(msg)) {
-    return "Meta está limitando esta cuenta por demasiadas solicitudes (error 17). Espera unos minutos o cambia a otra cuenta; los datos se recuperan solos.";
-  }
-  if (/\berror 4\b/i.test(msg)) {
-    return "Límite de solicitudes de la app alcanzado (error 4). Espera unos minutos e intenta de nuevo.";
-  }
-  if (/\berror 190\b|access token/i.test(msg)) {
-    return "El token del Business Manager expiró o es inválido (error 190). Actualízalo en Ajustes.";
-  }
-  return msg;
-}
 const ROW_BLUE = "bg-blue-50 border-l-4 border-l-blue-400 hover:bg-blue-100/60";
 function rowColorClass(ins: Insights | undefined, loaded: boolean): string {
   // Sin insights: si ya terminó de cargar = sin actividad (profit 0) → azul; si aún carga → neutro.
@@ -193,14 +217,48 @@ function RoiCell({ v, loading }: { v: number | null; loading: boolean }) {
   </span>;
 }
 
+function MetricCells({ ins, loading }: { ins: Insights | undefined; loading: boolean }) {
+  const m = calcMetrics(ins);
+  return (
+    <>
+      <TableCell className="py-2 text-right"><MC v={fmtI(m?.sales ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtC(m?.spend ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtC(m?.revenue ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><ProfitCell v={m?.profit ?? 0} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpa ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><RoiCell v={m?.roi ?? 0} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpm ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpc ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtP(m?.ctr ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtP(m?.uctr ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtI(m?.ic ?? 0)} loading={loading} /></TableCell>
+      <TableCell className="py-2 text-right"><MC v={fmtC(m?.costPerIc ?? 0)} loading={loading} /></TableCell>
+    </>
+  );
+}
+
+function Checkbox({ checked, indeterminate, onToggle, label }: {
+  checked: boolean; indeterminate?: boolean; onToggle: () => void; label: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate && !checked; }, [indeterminate, checked]);
+  return (
+    <input
+      ref={ref} type="checkbox" checked={checked} aria-label={label}
+      onChange={() => { }} onClick={e => { e.stopPropagation(); onToggle(); }}
+      className="cursor-pointer h-3.5 w-3.5"
+    />
+  );
+}
+
 // ─── Status toggle ─────────────────────────────────────────────────────────────
 
 function StatusCell({
-  entityId, status, entityType, accountId, loadingSet, onToggle,
+  entityId, status, entityType, loadingSet, onToggle,
 }: {
-  entityId: string; status: string; entityType: "campaign" | "adset" | "ad";
-  accountId: string; loadingSet: Set<string>;
-  onToggle: (id: string, currentStatus: string, type: "campaign" | "adset" | "ad") => void;
+  entityId: string; status: string; entityType: Level;
+  loadingSet: Set<string>;
+  onToggle: (id: string, currentStatus: string, type: Level) => void;
 }) {
   const loading = loadingSet.has(entityId);
   const isActive = status === "ACTIVE";
@@ -231,6 +289,162 @@ function StatusCell({
   );
 }
 
+/** Barra que aparece al seleccionar: acciones masivas a mano. */
+function SelectionBar({
+  count, noun, busy, onDuplicate, onStatus, onClear,
+}: {
+  count: number; noun: string; busy: boolean;
+  onDuplicate?: () => void; onStatus: (s: EntityStatus) => void; onClear: () => void;
+}) {
+  if (count === 0) return null;
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 mb-2 flex-wrap">
+      <span className="text-xs font-medium">{count} {noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}</span>
+      <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+        {onDuplicate && (
+          <Button size="sm" className="h-7 text-xs" onClick={onDuplicate} disabled={busy}>
+            <Copy className="h-3.5 w-3.5 mr-1" /> Duplicar
+          </Button>
+        )}
+        <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={() => onStatus("PAUSED")} disabled={busy}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Pause className="h-3.5 w-3.5 mr-1" />} Pausar
+        </Button>
+        <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={() => onStatus("ACTIVE")} disabled={busy}>
+          <Play className="h-3.5 w-3.5 mr-1" /> Activar
+        </Button>
+        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onClear} disabled={busy}>
+          <X className="h-3.5 w-3.5 mr-1" /> Limpiar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Indicador de frescura + botón «Traer de Meta». */
+function FreshnessBar({ freshness, now, loading, onRefresh }: {
+  freshness: Freshness; now: number; loading: boolean; onRefresh: () => void;
+}) {
+  const label = freshness.source === "meta" ? "de Meta" : freshness.source === "cache" ? "en caché" : "copia guardada";
+  const old = freshness.syncedAt ? now - new Date(freshness.syncedAt).getTime() > 45 * 60_000 : false;
+  return (
+    <div className="flex items-center gap-2">
+      {freshness.syncedAt && (
+        <span className={`text-[11px] ${old ? "text-amber-700" : "text-muted-foreground"}`} title={new Date(freshness.syncedAt).toLocaleString("es-CO")}>
+          Actualizado {ago(freshness.syncedAt, now)} · {label}
+        </span>
+      )}
+      <Button variant="outline" size="sm" className="h-7 px-2 text-xs bg-white" onClick={onRefresh} disabled={loading}
+        title="Pide los datos a Meta ahora, sin usar copias guardadas">
+        {loading ? <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5 mr-1" />}
+        Traer de Meta
+      </Button>
+    </div>
+  );
+}
+
+// ─── Seguimiento de lotes de duplicación ──────────────────────────────────────
+
+interface BatchState { batchIds: string[]; total: number; done: number; failed: number; withIssues: number }
+
+function useBatchTracker(onFinished: () => void) {
+  const [batch, setBatch] = useState<BatchState | null>(null);
+  const finishedRef = useRef(onFinished);
+  useEffect(() => { finishedRef.current = onFinished; }, [onFinished]);
+
+  useEffect(() => {
+    if (!batch || batch.done + batch.failed >= batch.total) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const lists = await Promise.all(batch.batchIds.map(id =>
+          fetch(`/api/jobs?batchId=${id}`).then(r => r.json()).then(j => (j.jobs ?? []) as Array<{ status: string; output?: { issues?: unknown[] } }>)));
+        const jobs = lists.flat();
+        if (cancelled) return;
+        const done = jobs.filter(j => j.status === "completed").length;
+        const failed = jobs.filter(j => j.status === "failed" || j.status === "cancelled").length;
+        const withIssues = jobs.filter(j => j.status === "completed" && (j.output?.issues?.length ?? 0) > 0).length;
+        setBatch(b => b && { ...b, done, failed, withIssues });
+        if (done + failed >= batch.total) {
+          if (failed > 0 || withIssues > 0) {
+            toast.warning(`Duplicación terminada: ${done} OK, ${failed} con error${withIssues ? `, ${withIssues} con avisos` : ""}`, {
+              description: "Revisa el motivo de cada uno en Trabajos.",
+              duration: 12_000,
+            });
+          } else {
+            toast.success(`Duplicación terminada: ${done} copia${done > 1 ? "s" : ""} creada${done > 1 ? "s" : ""}`);
+          }
+          finishedRef.current();
+        }
+      } catch { /* reintenta en el siguiente tick */ }
+    };
+    const t = setInterval(tick, 8000);
+    void tick();
+    return () => { cancelled = true; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch?.batchIds.join(","), batch?.total, batch && batch.done + batch.failed >= batch.total]);
+
+  return {
+    batch,
+    track: (batchIds: string[], total: number) => setBatch({ batchIds, total, done: 0, failed: 0, withIssues: 0 }),
+    dismiss: () => setBatch(null),
+  };
+}
+
+function BatchBanner({ batch, onDismiss, onOpenJobs }: { batch: BatchState | null; onDismiss: () => void; onOpenJobs: () => void }) {
+  if (!batch) return null;
+  const finished = batch.done + batch.failed >= batch.total;
+  const pct = Math.round(((batch.done + batch.failed) / Math.max(1, batch.total)) * 100);
+  return (
+    <div className={`flex items-center gap-3 rounded-md border px-3 py-2 mb-2 text-xs ${finished ? (batch.failed ? "border-amber-300 bg-amber-50" : "border-green-300 bg-green-50") : "border-blue-200 bg-blue-50"}`}>
+      {finished
+        ? (batch.failed ? <AlertTriangle className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />)
+        : <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+      <span className="font-medium">
+        {finished ? "Duplicación terminada" : "Duplicando"}: {batch.done}/{batch.total} creadas
+        {batch.failed ? ` · ${batch.failed} con error` : ""}{batch.withIssues ? ` · ${batch.withIssues} con avisos` : ""}
+      </span>
+      {!finished && (
+        <div className="h-1.5 w-28 bg-white rounded-full overflow-hidden">
+          <div className="h-full bg-blue-500 transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      <button className="ml-auto text-primary hover:underline" onClick={onOpenJobs}>Ver trabajos</button>
+      <button className="text-muted-foreground hover:text-foreground" onClick={onDismiss} title="Ocultar"><X className="h-3.5 w-3.5" /></button>
+    </div>
+  );
+}
+
+/** Cambia el estado de varias entidades de una en una (sin ráfagas a Meta). */
+async function bulkStatus(
+  items: Array<{ id: string; accountId: string; bmId?: string }>, entityType: Level, status: EntityStatus,
+): Promise<{ ok: string[]; failed: number; firstError: unknown }> {
+  const ok: string[] = [];
+  let failed = 0;
+  let firstError: unknown = null;
+  for (const it of items) {
+    try {
+      const res = await fetch("/api/meta/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId: it.id, status, accountId: it.accountId, entityType, bmId: it.bmId }),
+      });
+      if (res.ok) ok.push(it.id);
+      else { failed++; firstError ??= await res.json().catch(() => null); }
+    } catch {
+      failed++;
+    }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return { ok, failed, firstError };
+}
+
+function reportBulk(r: { ok: string[]; failed: number; firstError: unknown }, status: EntityStatus) {
+  const verb = status === "ACTIVE" ? "activad" : "pausad";
+  if (r.failed === 0) { toast.success(`${r.ok.length} ${verb}o${r.ok.length > 1 ? "s" : ""}`); return; }
+  toastApiError(r.firstError, `${r.failed} no se pudieron cambiar`);
+  if (r.ok.length) toast.message(`${r.ok.length} ${verb}o${r.ok.length > 1 ? "s" : ""} correctamente`);
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 function ManagerInner() {
@@ -240,6 +454,7 @@ function ManagerInner() {
   const bmId = searchParams.get("bmId") ?? undefined;
 
   const [accountName, setAccountName] = useState<string>("");
+  const [currency, setCurrency] = useState<string>("USD");
 
   const [level, setLevel] = useState<Level>("campaign");
   const [selCampaign, setSelCampaign] = useState<Selection | null>(null);
@@ -258,12 +473,18 @@ function ManagerInner() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadingInsights, setLoadingInsights] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [error, setError] = useState<ErrorInfo | null>(null);
+  const [staleInfo, setStaleInfo] = useState<ErrorInfo | null>(null);
   const [stale, setStale] = useState(false);
+  const [dataFresh, setDataFresh] = useState<Freshness>({ syncedAt: null, source: null });
+  const [insFresh, setInsFresh] = useState<Freshness>({ syncedAt: null, source: null });
+  const [now, setNow] = useState(() => Date.now());
 
   const [statusFilter, setStatusFilter] = useState("ACTIVE");
   const [nameFilter, setNameFilter] = useState("");
-  const [duplicateTarget, setDuplicateTarget] = useState<Campaign | null>(null);
+  const [duplicateTargets, setDuplicateTargets] = useState<Campaign[] | null>(null);
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(new Set());
   const [selectedAdsetIds, setSelectedAdsetIds] = useState<Set<string>>(new Set());
   const [showDuplicateAdsetsModal, setShowDuplicateAdsetsModal] = useState(false);
   const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(new Set());
@@ -274,70 +495,102 @@ function ManagerInner() {
   const adsetSnap = useRef<Snap<AdSet[]> | null>(null);
   const adSnap = useRef<Snap<Ad[]> | null>(null);
   const insSnap = useRef<Snap<Record<string, Insights>> | null>(null);
-  // Checkbox header refs — DEBEN declararse antes de cualquier early return (regla de hooks).
-  const adsetCheckRef = useRef<HTMLInputElement>(null);
-  const adCheckRef = useRef<HTMLInputElement>(null);
+
+  // "hace X min" se actualiza solo.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  /** Lee del JSON la frescura, el aviso de copia desactualizada y lo deja en estado. */
+  const applyMeta = useCallback((json: { syncedAt?: string; source?: string; stale?: boolean; errorInfo?: ErrorInfo; staleReason?: string }) => {
+    setDataFresh({ syncedAt: json.syncedAt ?? null, source: json.source ?? null });
+    setStale(!!json.stale);
+    setStaleInfo(json.stale ? (json.errorInfo ?? { title: json.staleReason ?? "Mostrando datos guardados" }) : null);
+  }, []);
 
   // ── Loaders ───────────────────────────────────────────────────────────────
 
   const loadCampaigns = useCallback(async (refresh = false, cursor?: string) => {
     if (!accountId) return;
-    cursor ? setLoadingMore(true) : setLoadingData(true);
+    if (cursor) setLoadingMore(true); else setLoadingData(true);
     setError(null);
     const p = new URLSearchParams({ accountId });
     if (cursor) p.set("cursor", cursor);
     if (refresh) p.set("refresh", "true");
     if (bmId) p.set("bmId", bmId);
-    const res = await fetch(`/api/meta/campaigns?${p}`);
-    const json = await res.json();
-    cursor ? setLoadingMore(false) : setLoadingData(false);
-    if (!res.ok) { setError(friendlyMetaError(json.error) ?? "Error al cargar campañas"); return; }
-    setStale(!!json.stale);
-    setCampaigns(prev => cursor ? [...prev, ...json.campaigns] : json.campaigns);
-    setNextCursor(json.nextCursor);
-    if (!cursor) campSnap.current = { data: { list: json.campaigns, cur: json.nextCursor }, key: accountId, ts: Date.now() };
-    if (refresh) toast.success("Campañas actualizadas");
-  }, [accountId]);
+    try {
+      const res = await fetch(`/api/meta/campaigns?${p}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar campañas" }); return; }
+      applyMeta(json);
+      setCampaigns(prev => cursor ? [...prev, ...json.campaigns] : json.campaigns);
+      setNextCursor(json.nextCursor);
+      if (!cursor) campSnap.current = { data: { list: json.campaigns, cur: json.nextCursor }, key: accountId, ts: Date.now() };
+    } catch {
+      setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión y pulsa «Traer de Meta»." });
+    } finally {
+      if (cursor) setLoadingMore(false); else setLoadingData(false);
+    }
+  }, [accountId, bmId, applyMeta]);
 
-  const loadAdsets = useCallback(async (campaignId?: string) => {
+  const loadAdsets = useCallback(async (campaignId?: string, refresh = false) => {
     if (!accountId) return;
-    setLoadingData(true); setError(null); setStale(false);
-    const url = campaignId
-      ? `/api/meta/adsets?accountId=${accountId}&campaignId=${campaignId}${bmId ? `&bmId=${bmId}` : ""}`
-      : `/api/meta/adsets?accountId=${accountId}${bmId ? `&bmId=${bmId}` : ""}`;
-    const res = await fetch(url);
-    const json = await res.json();
-    setLoadingData(false);
-    if (!res.ok) { setError(friendlyMetaError(json.error) ?? "Error"); return; }
-    setAdsets(json.adsets);
-    adsetSnap.current = { data: json.adsets, key: `adsets:${accountId}:${campaignId || "all"}`, ts: Date.now() };
-  }, [accountId]);
+    setLoadingData(true); setError(null);
+    const p = new URLSearchParams({ accountId });
+    if (campaignId) p.set("campaignId", campaignId);
+    if (bmId) p.set("bmId", bmId);
+    if (refresh) p.set("refresh", "true");
+    try {
+      const res = await fetch(`/api/meta/adsets?${p}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar ad sets" }); return; }
+      applyMeta(json);
+      setAdsets(json.adsets);
+      adsetSnap.current = { data: json.adsets, key: `adsets:${accountId}:${campaignId || "all"}`, ts: Date.now() };
+    } catch {
+      setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión y pulsa «Traer de Meta»." });
+    } finally {
+      setLoadingData(false);
+    }
+  }, [accountId, bmId, applyMeta]);
 
-  const loadAds = useCallback(async (adsetId?: string) => {
+  const loadAds = useCallback(async (adsetId?: string, refresh = false) => {
     if (!accountId) return;
-    setLoadingData(true); setError(null); setStale(false);
-    const url = adsetId
-      ? `/api/meta/ads?accountId=${accountId}&adsetId=${adsetId}${bmId ? `&bmId=${bmId}` : ""}`
-      : `/api/meta/ads?accountId=${accountId}${bmId ? `&bmId=${bmId}` : ""}`;
-    const res = await fetch(url);
-    const json = await res.json();
-    setLoadingData(false);
-    if (!res.ok) { setError(friendlyMetaError(json.error) ?? "Error"); return; }
-    setAds(json.ads);
-    adSnap.current = { data: json.ads, key: `ads:${accountId}:${adsetId || "all"}`, ts: Date.now() };
-  }, [accountId]);
+    setLoadingData(true); setError(null);
+    const p = new URLSearchParams({ accountId });
+    if (adsetId) p.set("adsetId", adsetId);
+    if (bmId) p.set("bmId", bmId);
+    if (refresh) p.set("refresh", "true");
+    try {
+      const res = await fetch(`/api/meta/ads?${p}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar anuncios" }); return; }
+      applyMeta(json);
+      setAds(json.ads);
+      adSnap.current = { data: json.ads, key: `ads:${accountId}:${adsetId || "all"}`, ts: Date.now() };
+    } catch {
+      setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión y pulsa «Traer de Meta»." });
+    } finally {
+      setLoadingData(false);
+    }
+  }, [accountId, bmId, applyMeta]);
 
-  const loadInsights = useCallback(async (lvl: Level, date: string) => {
+  const loadInsights = useCallback(async (lvl: Level, date: string, refresh = false) => {
     if (!accountId) return;
     setLoadingInsights(true);
+    const p = new URLSearchParams({ accountId, level: lvl, datePreset: date });
+    if (bmId) p.set("bmId", bmId);
+    if (refresh) p.set("refresh", "true");
     try {
-      const res = await fetch(`/api/meta/insights?accountId=${accountId}&level=${lvl}&datePreset=${date}${bmId ? `&bmId=${bmId}` : ""}`);
-      const json = await res.json();
+      const res = await fetch(`/api/meta/insights?${p}`);
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        console.error(`[insights] ${lvl} error:`, json.error);
-        toast.error(`Error métricas (${lvl}): ${json.error ?? "desconocido"}`);
+        toastApiError(json, `No se pudieron cargar las métricas (${lvl})`);
         return;
       }
+      setInsFresh({ syncedAt: json.syncedAt ?? null, source: json.source ?? null });
+      if (json.stale) toastApiError({ errorInfo: json.errorInfo, error: json.staleReason }, "Métricas desactualizadas");
       const idField = lvl === "campaign" ? "campaign_id" : lvl === "adset" ? "adset_id" : "ad_id";
       const map: Record<string, Insights> = {};
       for (const item of json.data ?? []) {
@@ -347,10 +600,11 @@ function ManagerInner() {
       insSnap.current = { data: map, key: `${lvl}:${accountId}:${date}`, ts: Date.now() };
     } catch (e) {
       console.error(`[insights] fetch error:`, e);
+      toast.error("No se pudo conectar con el servidor para cargar las métricas");
     } finally {
       setLoadingInsights(false);
     }
-  }, [accountId]);
+  }, [accountId, bmId]);
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
@@ -358,14 +612,14 @@ function ManagerInner() {
     if (accountId) { loadCampaigns(); loadInsights("campaign", datePreset); }
   }, [accountId]); // eslint-disable-line
 
-  // Nombre de la cuenta actual (para mostrar en qué cuenta estás). Usa el listado cacheado.
+  // Nombre y moneda de la cuenta actual. Usa el listado cacheado.
   useEffect(() => {
     if (!accountId) return;
     fetch(`/api/meta/accounts${bmId ? `?bmId=${bmId}` : ""}`)
       .then(r => r.json())
       .then(j => {
         const acc = (j.accounts ?? []).find((a: { id: string; name: string }) => a.id === `act_${accountId}` || a.id === accountId);
-        if (acc) setAccountName(acc.name);
+        if (acc) { setAccountName(acc.name); if (acc.currency) setCurrency(acc.currency); }
       })
       .catch(() => { });
   }, [accountId, bmId]);
@@ -377,118 +631,139 @@ function ManagerInner() {
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
+  function clearSelections() {
+    setSelectedCampaignIds(new Set()); setSelectedAdsetIds(new Set()); setSelectedAdIds(new Set());
+  }
+
   async function drillAdsets(campaign: Campaign) {
     setSelCampaign({ id: campaign.id, name: campaign.name });
     setSelAdset(null);
     setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
-    setSelectedAdsetIds(new Set()); setSelectedAdIds(new Set());
+    clearSelections();
     const dKey = `adsets:${accountId}:${campaign.id}`;
     const iKey = `adset:${accountId}:${datePreset}`;
-    const dataFresh = fresh(adsetSnap.current, dKey);
-    const insFresh = fresh(insSnap.current, iKey);
-    if (dataFresh) setAdsets(adsetSnap.current!.data); else setAdsets([]);
-    if (insFresh) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataFresh) await loadAdsets(campaign.id);
-    if (!insFresh) loadInsights("adset", datePreset);
+    const dataOk = fresh(adsetSnap.current, dKey);
+    const insOk = fresh(insSnap.current, iKey);
+    if (dataOk) setAdsets(adsetSnap.current!.data); else setAdsets([]);
+    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
+    if (!dataOk) await loadAdsets(campaign.id);
+    if (!insOk) loadInsights("adset", datePreset);
   }
 
   async function drillAds(adset: AdSet) {
     setSelAdset({ id: adset.id, name: adset.name });
     setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
+    clearSelections();
     const dKey = `ads:${accountId}:${adset.id}`;
     const iKey = `ad:${accountId}:${datePreset}`;
-    const dataFresh = fresh(adSnap.current, dKey);
-    const insFresh = fresh(insSnap.current, iKey);
-    if (dataFresh) setAds(adSnap.current!.data); else setAds([]);
-    if (insFresh) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataFresh) await loadAds(adset.id);
-    if (!insFresh) loadInsights("ad", datePreset);
+    const dataOk = fresh(adSnap.current, dKey);
+    const insOk = fresh(insSnap.current, iKey);
+    if (dataOk) setAds(adSnap.current!.data); else setAds([]);
+    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
+    if (!dataOk) await loadAds(adset.id);
+    if (!insOk) loadInsights("ad", datePreset);
   }
 
   // Tabs siempre clickeables → nivel cuenta
   async function goToCampaigns() {
     setSelCampaign(null); setSelAdset(null);
     setLevel("campaign"); setNameFilter(""); setStatusFilter("ACTIVE");
+    clearSelections();
     const dKey = accountId!;
     const iKey = `campaign:${accountId}:${datePreset}`;
-    const dataFresh = fresh(campSnap.current, dKey);
-    const insFresh = fresh(insSnap.current, iKey);
-    if (dataFresh) { setCampaigns(campSnap.current!.data.list); setNextCursor(campSnap.current!.data.cur); }
+    const dataOk = fresh(campSnap.current, dKey);
+    const insOk = fresh(insSnap.current, iKey);
+    if (dataOk) { setCampaigns(campSnap.current!.data.list); setNextCursor(campSnap.current!.data.cur); }
     else { setCampaigns([]); setNextCursor(null); }
-    if (insFresh) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataFresh) await loadCampaigns();
-    if (!insFresh) loadInsights("campaign", datePreset);
+    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
+    if (!dataOk) await loadCampaigns();
+    if (!insOk) loadInsights("campaign", datePreset);
   }
 
   async function goToAdsets() {
     setSelCampaign(null); setSelAdset(null);
     setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
-    setSelectedAdsetIds(new Set()); setSelectedAdIds(new Set());
+    clearSelections();
     const dKey = `adsets:${accountId}:all`;
     const iKey = `adset:${accountId}:${datePreset}`;
-    const dataFresh = fresh(adsetSnap.current, dKey);
-    const insFresh = fresh(insSnap.current, iKey);
-    if (dataFresh) setAdsets(adsetSnap.current!.data); else setAdsets([]);
-    if (insFresh) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataFresh) await loadAdsets();
-    if (!insFresh) loadInsights("adset", datePreset);
+    const dataOk = fresh(adsetSnap.current, dKey);
+    const insOk = fresh(insSnap.current, iKey);
+    if (dataOk) setAdsets(adsetSnap.current!.data); else setAdsets([]);
+    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
+    if (!dataOk) await loadAdsets();
+    if (!insOk) loadInsights("adset", datePreset);
   }
 
   async function goToAds() {
     setSelAdset(null);
     setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
-    setSelectedAdIds(new Set());
+    clearSelections();
     const dKey = `ads:${accountId}:all`;
     const iKey = `ad:${accountId}:${datePreset}`;
-    const dataFresh = fresh(adSnap.current, dKey);
-    const insFresh = fresh(insSnap.current, iKey);
-    if (dataFresh) setAds(adSnap.current!.data); else setAds([]);
-    if (insFresh) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataFresh) await loadAds();
-    if (!insFresh) loadInsights("ad", datePreset);
+    const dataOk = fresh(adSnap.current, dKey);
+    const insOk = fresh(insSnap.current, iKey);
+    if (dataOk) setAds(adSnap.current!.data); else setAds([]);
+    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
+    if (!dataOk) await loadAds();
+    if (!insOk) loadInsights("ad", datePreset);
   }
 
-  async function refresh() {
-    // Invalidar snapshot del nivel actual para forzar re-fetch
-    if (level === "campaign") { campSnap.current = null; insSnap.current = null; }
-    else if (level === "adset") { adsetSnap.current = null; insSnap.current = null; }
-    else { adSnap.current = null; insSnap.current = null; }
+  // «Traer de Meta»: estructura y métricas en vivo, sin copias guardadas.
+  async function refreshFromMeta() {
+    campSnap.current = null; adsetSnap.current = null; adSnap.current = null; insSnap.current = null;
     setInsightsMap({});
+    const ins = loadInsights(level, datePreset, true);
     if (level === "campaign") await loadCampaigns(true);
-    else if (level === "adset") await loadAdsets(selCampaign?.id);
-    else if (level === "ad") await loadAds(selAdset?.id);
-    loadInsights(level, datePreset);
+    else if (level === "adset") await loadAdsets(selCampaign?.id, true);
+    else await loadAds(selAdset?.id, true);
+    await ins;
   }
+
+  const tracker = useBatchTracker(() => { if (level === "campaign") void loadCampaigns(true); });
 
   // ── Status toggle ─────────────────────────────────────────────────────────
 
-  async function toggleStatus(entityId: string, currentStatus: string, entityType: "campaign" | "adset" | "ad") {
+  function patchStatus(entityType: Level, ids: Set<string>, status: string) {
+    if (entityType === "campaign") setCampaigns(p => p.map(c => ids.has(c.id) ? { ...c, status } : c));
+    else if (entityType === "adset") setAdsets(p => p.map(a => ids.has(a.id) ? { ...a, status } : a));
+    else setAds(p => p.map(a => ids.has(a.id) ? { ...a, status } : a));
+  }
+
+  async function toggleStatus(entityId: string, currentStatus: string, entityType: Level) {
     if (loadingStatus.has(entityId) || !accountId) return;
     const newStatus = currentStatus === "ACTIVE" ? "PAUSED" : "ACTIVE";
 
-    // Actualización optimista
-    if (entityType === "campaign") setCampaigns(p => p.map(c => c.id === entityId ? { ...c, status: newStatus } : c));
-    else if (entityType === "adset") setAdsets(p => p.map(a => a.id === entityId ? { ...a, status: newStatus } : a));
-    else setAds(p => p.map(a => a.id === entityId ? { ...a, status: newStatus } : a));
-
+    patchStatus(entityType, new Set([entityId]), newStatus); // optimista
     setLoadingStatus(p => new Set([...p, entityId]));
-
     try {
       const res = await fetch("/api/meta/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ entityId, status: newStatus, accountId, entityType, bmId }),
       });
-      if (!res.ok) throw new Error("Error en API");
+      if (!res.ok) {
+        patchStatus(entityType, new Set([entityId]), currentStatus); // revertir
+        toastApiError(await res.json().catch(() => null), "No se pudo cambiar el estado");
+        return;
+      }
       toast.success(newStatus === "ACTIVE" ? "Activado" : "Pausado");
     } catch {
-      // Revertir
-      if (entityType === "campaign") setCampaigns(p => p.map(c => c.id === entityId ? { ...c, status: currentStatus } : c));
-      else if (entityType === "adset") setAdsets(p => p.map(a => a.id === entityId ? { ...a, status: currentStatus } : a));
-      else setAds(p => p.map(a => a.id === entityId ? { ...a, status: currentStatus } : a));
-      toast.error("Error al cambiar estado");
+      patchStatus(entityType, new Set([entityId]), currentStatus);
+      toast.error("No se pudo conectar con el servidor; el estado no cambió");
     } finally {
       setLoadingStatus(p => { const n = new Set(p); n.delete(entityId); return n; });
+    }
+  }
+
+  async function bulkSetStatus(entityType: Level, ids: Set<string>, status: EntityStatus) {
+    if (!accountId || ids.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const r = await bulkStatus([...ids].map(id => ({ id, accountId, bmId })), entityType, status);
+      patchStatus(entityType, new Set(r.ok), status);
+      reportBulk(r, status);
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -529,6 +804,15 @@ function ManagerInner() {
   if (!accountId) {
     return <GlobalCampaignsView />;
   }
+
+  // Selección del nivel actual (para la barra y la casilla de cabecera).
+  const sel = level === "campaign" ? selectedCampaignIds : level === "adset" ? selectedAdsetIds : selectedAdIds;
+  const setSel = level === "campaign" ? setSelectedCampaignIds : level === "adset" ? setSelectedAdsetIds : setSelectedAdIds;
+  const visIds = (level === "campaign" ? visCampaigns : level === "adset" ? visAdsets : visAds).map(r => r.id);
+  const allSel = visIds.length > 0 && visIds.every(id => sel.has(id));
+  const someSel = visIds.some(id => sel.has(id));
+  const toggleOne = (id: string) => setSel(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleAll = () => setSel(allSel ? new Set() : new Set(visIds));
 
   // ── Tab labels ────────────────────────────────────────────────────────────
 
@@ -581,26 +865,25 @@ function ManagerInner() {
       {sh("costPerIc", "$/IC", "w-20")}
     </>
   );
+  const COLS = 18; // casilla + nombre + 12 métricas + estado + presupuesto/creative + acciones
 
-  function MetricCells({ ins, loading }: { ins: Insights | undefined; loading: boolean }) {
-    const m = calcMetrics(ins);
-    return (
-      <>
-        <TableCell className="py-2 text-right"><MC v={fmtI(m?.sales ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtC(m?.spend ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtC(m?.revenue ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><ProfitCell v={m?.profit ?? 0} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpa ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><RoiCell v={m?.roi ?? 0} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpm ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpc ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtP(m?.ctr ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtP(m?.uctr ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtI(m?.ic ?? 0)} loading={loading} /></TableCell>
-        <TableCell className="py-2 text-right"><MC v={fmtC(m?.costPerIc ?? 0)} loading={loading} /></TableCell>
-      </>
-    );
-  }
+  /** Botones visibles por fila. */
+  const rowActions = (lvl: Level, id: string, extra?: React.ReactNode) => (
+    <div className="flex items-center justify-end gap-0.5" onClick={e => e.stopPropagation()}>
+      {extra}
+      <a
+        href={adsManagerUrl(lvl, accountId, id)} target="_blank" rel="noreferrer"
+        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+        title="Abrir en Ads Manager"
+      >
+        <ExternalLink className="h-3.5 w-3.5" />
+      </a>
+    </div>
+  );
+
+  const freshness: Freshness = insFresh.syncedAt && dataFresh.syncedAt
+    ? (new Date(insFresh.syncedAt) < new Date(dataFresh.syncedAt) ? insFresh : dataFresh)
+    : (dataFresh.syncedAt ? dataFresh : insFresh);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -611,7 +894,10 @@ function ManagerInner() {
       <div className="flex items-center gap-2 pb-2 text-sm">
         <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
         <span className="font-semibold truncate">{accountName || "Cuenta"}</span>
-        <span className="text-muted-foreground text-xs">· {accountId}</span>
+        <span className="text-muted-foreground text-xs">· {accountId}{currency !== "USD" ? ` · ${currency}` : ""}</span>
+        <button className="ml-2 text-xs text-primary hover:underline" onClick={() => router.push("/meta/campaigns")}>
+          Todas las cuentas
+        </button>
       </div>
 
       {/* Tabs */}
@@ -630,9 +916,7 @@ function ManagerInner() {
               {DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={refresh} disabled={loadingData}>
-            <RefreshCw className={`h-3.5 w-3.5 ${loadingData ? "animate-spin" : ""}`} />
-          </Button>
+          <FreshnessBar freshness={freshness} now={now} loading={loadingData || loadingInsights} onRefresh={refreshFromMeta} />
         </div>
       </div>
 
@@ -656,7 +940,7 @@ function ManagerInner() {
         </Select>
 
         <span className="text-xs text-muted-foreground">
-          {!loadingData && (level === "campaign" ? visCampaigns.length : level === "adset" ? visAdsets.length : visAds.length)} elementos
+          {!loadingData && visIds.length} elementos
         </span>
 
         <Button
@@ -665,33 +949,34 @@ function ManagerInner() {
         >
           <Briefcase className="h-3.5 w-3.5 mr-1" /> Trabajos
         </Button>
-
-        {level === "adset" && selectedAdsetIds.size > 0 && (
-          <Button size="sm" className="ml-auto h-8" onClick={() => setShowDuplicateAdsetsModal(true)}>
-            <Copy className="h-3.5 w-3.5 mr-1" />
-            Duplicar {selectedAdsetIds.size} ad set{selectedAdsetIds.size > 1 ? "s" : ""}
-          </Button>
-        )}
-        {level === "ad" && selectedAdIds.size > 0 && (
-          <Button size="sm" className="ml-auto h-8" onClick={() => setShowDuplicateAdsModal(true)}>
-            <Copy className="h-3.5 w-3.5 mr-1" />
-            Duplicar {selectedAdIds.size} anuncio{selectedAdIds.size > 1 ? "s" : ""}
-          </Button>
-        )}
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" /><span>{error}</span>
-        </div>
-      )}
+      <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={() => router.push("/meta/jobs")} />
 
-      {/* Datos en caché (Meta limitó la cuenta y servimos la última copia buena) */}
+      {/* Barra de acciones de la selección */}
+      <SelectionBar
+        count={sel.size}
+        noun={level === "campaign" ? "campaña" : level === "adset" ? "ad set" : "anuncio"}
+        busy={bulkBusy}
+        onDuplicate={
+          level === "campaign" ? () => setDuplicateTargets(campaigns.filter(c => selectedCampaignIds.has(c.id)))
+            : level === "adset" ? () => setShowDuplicateAdsetsModal(true)
+              : () => setShowDuplicateAdsModal(true)
+        }
+        onStatus={s => bulkSetStatus(level, sel, s)}
+        onClear={() => setSel(new Set())}
+      />
+
+      {/* Error */}
+      {error && <div className="mb-2"><ErrorDetails info={error} /></div>}
+
+      {/* Datos de respaldo (Meta falló o limitó la cuenta y servimos la última copia buena) */}
       {stale && !error && (
-        <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>Mostrando datos en caché — Meta está limitando esta cuenta (error 17). Se actualizarán solos en unos minutos.</span>
+        <div className="mb-2">
+          <ErrorDetails
+            variant="warning"
+            info={{ ...staleInfo, title: `Mostrando datos guardados (${ago(dataFresh.syncedAt, now)}): ${staleInfo?.title ?? "Meta no respondió"}` }}
+          />
         </div>
       )}
 
@@ -702,36 +987,12 @@ function ManagerInner() {
         </div>
       ) : (
         <div className="rounded-lg border bg-white shadow-sm overflow-x-auto">
-          <Table className="w-full min-w-[1200px]">
+          <Table className="w-full min-w-[1280px]">
             <TableHeader>
               <TableRow className="bg-muted/40 hover:bg-muted/40 border-b">
-                {(level === "adset" || level === "ad") && (
-                  <TableHead className="py-2 w-8">
-                    <input
-                      type="checkbox"
-                      ref={level === "adset" ? adsetCheckRef : adCheckRef}
-                      checked={
-                        level === "adset"
-                          ? visAdsets.length > 0 && selectedAdsetIds.size === visAdsets.length
-                          : visAds.length > 0 && selectedAdIds.size === visAds.length
-                      }
-                      onChange={() => {}}
-                      onClick={e => {
-                        e.stopPropagation();
-                        if (level === "adset") {
-                          setSelectedAdsetIds(prev =>
-                            prev.size === visAdsets.length ? new Set() : new Set(visAdsets.map(a => a.id))
-                          );
-                        } else {
-                          setSelectedAdIds(prev =>
-                            prev.size === visAds.length ? new Set() : new Set(visAds.map(a => a.id))
-                          );
-                        }
-                      }}
-                      className="cursor-pointer"
-                    />
-                  </TableHead>
-                )}
+                <TableHead className="py-2 w-8">
+                  <Checkbox checked={allSel} indeterminate={someSel} onToggle={toggleAll} label="Seleccionar todo" />
+                </TableHead>
                 <TableHead
                   className={`py-2 text-[10px] font-semibold min-w-[240px] cursor-pointer select-none hover:text-foreground ${sort?.key === "name" ? "text-primary" : ""}`}
                   onClick={() => toggleSort("name")}
@@ -742,6 +1003,7 @@ function ManagerInner() {
                 <TableHead className="py-2 text-[10px] font-semibold w-28">STATUS</TableHead>
                 {level !== "ad" && <TableHead className="py-2 text-[10px] font-semibold w-20">PRESUP.</TableHead>}
                 {level === "ad" && <TableHead className="py-2 text-[10px] font-semibold w-20">CREATIVE</TableHead>}
+                <TableHead className="py-2 text-[10px] font-semibold w-28 text-right">ACCIONES</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -750,30 +1012,40 @@ function ManagerInner() {
               {level === "campaign" && (
                 visCampaigns.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={16} className="text-center py-12 text-muted-foreground text-sm">
+                    <TableCell colSpan={COLS} className="text-center py-12 text-muted-foreground text-sm">
                       Sin campañas{statusFilter !== "ALL" ? ` (filtro: ${statusFilter})` : ""}
                     </TableCell>
                   </TableRow>
                 ) : visCampaigns.map(c => {
                   const ins = insightsMap[c.id];
                   return (
-                    <TableRow key={c.id} className={`cursor-pointer ${rowColorClass(ins, !loadingInsights)}`} onClick={() => drillAdsets(c)}>
+                    <TableRow key={c.id} className={`group cursor-pointer ${rowColorClass(ins, !loadingInsights)}`} onClick={() => drillAdsets(c)}>
+                      <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                        <Checkbox checked={selectedCampaignIds.has(c.id)} onToggle={() => toggleOne(c.id)} label={`Seleccionar ${c.name}`} />
+                      </TableCell>
                       <TableCell className="py-2 min-w-[240px]">
-                        <div className="flex items-center gap-1">
-                          <p className="font-medium text-xs leading-tight truncate hover:text-primary transition-colors flex-1" title={c.name}>{c.name}</p>
-                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0 opacity-50 hover:opacity-100"
-                            onClick={e => { e.stopPropagation(); setDuplicateTarget(c); }}>
-                            <Copy className="h-3 w-3" />
-                          </Button>
-                        </div>
+                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={c.name}>{c.name}</p>
                       </TableCell>
                       <MetricCells ins={ins} loading={loadingInsights} />
                       <TableCell className="py-2" onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={c.id} status={c.status} entityType="campaign"
-                          accountId={accountId ?? ""} loadingSet={loadingStatus} onToggle={toggleStatus} />
+                          loadingSet={loadingStatus} onToggle={toggleStatus} />
                       </TableCell>
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtBudget(c.daily_budget ?? c.lifetime_budget)}
+                        {fmtBudget(c.daily_budget ?? c.lifetime_budget, currency)}
+                      </TableCell>
+                      <TableCell className="py-2">
+                        {rowActions("campaign", c.id, (
+                          <>
+                            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar campaña"
+                              onClick={() => setDuplicateTargets([c])}>
+                              <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Ver ad sets" onClick={() => drillAdsets(c)}>
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ))}
                       </TableCell>
                     </TableRow>
                   );
@@ -784,31 +1056,40 @@ function ManagerInner() {
               {level === "adset" && (
                 visAdsets.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={16} className="text-center py-12 text-muted-foreground text-sm">
+                    <TableCell colSpan={COLS} className="text-center py-12 text-muted-foreground text-sm">
                       Sin ad sets{statusFilter !== "ALL" ? ` (filtro: ${statusFilter})` : ""}
                     </TableCell>
                   </TableRow>
                 ) : visAdsets.map(a => {
                   const ins = insightsMap[a.id];
-                  const checked = selectedAdsetIds.has(a.id);
                   return (
-                    <TableRow key={a.id} className={`cursor-pointer ${rowColorClass(ins, !loadingInsights)}`} onClick={() => drillAds(a)}>
-                      <TableCell className="py-2 w-8" onClick={e => {
-                        e.stopPropagation();
-                        setSelectedAdsetIds(prev => { const n = new Set(prev); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; });
-                      }}>
-                        <input type="checkbox" checked={checked} onChange={() => {}} className="cursor-pointer" />
+                    <TableRow key={a.id} className={`group cursor-pointer ${rowColorClass(ins, !loadingInsights)}`} onClick={() => drillAds(a)}>
+                      <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                        <Checkbox checked={selectedAdsetIds.has(a.id)} onToggle={() => toggleOne(a.id)} label={`Seleccionar ${a.name}`} />
                       </TableCell>
                       <TableCell className="py-2 min-w-[240px]">
-                        <p className="font-medium text-xs leading-tight truncate hover:text-primary transition-colors" title={a.name}>{a.name}</p>
+                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
                       </TableCell>
                       <MetricCells ins={ins} loading={loadingInsights} />
                       <TableCell className="py-2" onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={a.id} status={a.status} entityType="adset"
-                          accountId={accountId ?? ""} loadingSet={loadingStatus} onToggle={toggleStatus} />
+                          loadingSet={loadingStatus} onToggle={toggleStatus} />
                       </TableCell>
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtBudget(a.daily_budget ?? a.lifetime_budget)}
+                        {fmtBudget(a.daily_budget ?? a.lifetime_budget, currency)}
+                      </TableCell>
+                      <TableCell className="py-2">
+                        {rowActions("adset", a.id, (
+                          <>
+                            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar ad set"
+                              onClick={() => { setSelectedAdsetIds(new Set([a.id])); setShowDuplicateAdsetsModal(true); }}>
+                              <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Ver anuncios" onClick={() => drillAds(a)}>
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ))}
                       </TableCell>
                     </TableRow>
                   );
@@ -819,20 +1100,16 @@ function ManagerInner() {
               {level === "ad" && (
                 visAds.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={16} className="text-center py-12 text-muted-foreground text-sm">
+                    <TableCell colSpan={COLS} className="text-center py-12 text-muted-foreground text-sm">
                       Sin anuncios{statusFilter !== "ALL" ? ` (filtro: ${statusFilter})` : ""}
                     </TableCell>
                   </TableRow>
                 ) : visAds.map(ad => {
                   const ins = insightsMap[ad.id];
-                  const checked = selectedAdIds.has(ad.id);
                   return (
                     <TableRow key={ad.id} className={rowColorClass(ins, !loadingInsights)}>
-                      <TableCell className="py-2 w-8" onClick={e => {
-                        e.stopPropagation();
-                        setSelectedAdIds(prev => { const n = new Set(prev); n.has(ad.id) ? n.delete(ad.id) : n.add(ad.id); return n; });
-                      }}>
-                        <input type="checkbox" checked={checked} onChange={() => {}} className="cursor-pointer" />
+                      <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                        <Checkbox checked={selectedAdIds.has(ad.id)} onToggle={() => toggleOne(ad.id)} label={`Seleccionar ${ad.name}`} />
                       </TableCell>
                       <TableCell className="py-2 min-w-[240px]">
                         <p className="font-medium text-xs leading-tight truncate" title={ad.name}>{ad.name}</p>
@@ -840,10 +1117,18 @@ function ManagerInner() {
                       <MetricCells ins={ins} loading={loadingInsights} />
                       <TableCell className="py-2" onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={ad.id} status={ad.status} entityType="ad"
-                          accountId={accountId ?? ""} loadingSet={loadingStatus} onToggle={toggleStatus} />
+                          loadingSet={loadingStatus} onToggle={toggleStatus} />
                       </TableCell>
                       <TableCell className="py-2 text-[10px] text-muted-foreground font-mono truncate max-w-[80px]">
                         {ad.creative_id ?? "—"}
+                      </TableCell>
+                      <TableCell className="py-2">
+                        {rowActions("ad", ad.id, ad.creative_id ? (
+                          <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar anuncio"
+                            onClick={() => { setSelectedAdIds(new Set([ad.id])); setShowDuplicateAdsModal(true); }}>
+                            <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
+                          </Button>
+                        ) : null)}
                       </TableCell>
                     </TableRow>
                   );
@@ -866,15 +1151,19 @@ function ManagerInner() {
       )}
 
       {/* Modales */}
-      {duplicateTarget && (
+      {duplicateTargets && duplicateTargets.length > 0 && (
         <DuplicateCampaignModal
-          campaign={duplicateTarget} accountId={accountId ?? ""} bmId={bmId}
-          onClose={() => setDuplicateTarget(null)}
-          onSuccess={() => setDuplicateTarget(null)}
+          campaigns={duplicateTargets} accountId={accountId} bmId={bmId} currency={currency}
+          onClose={() => setDuplicateTargets(null)}
+          onSuccess={({ batchIds, queued }) => {
+            setDuplicateTargets(null);
+            setSelectedCampaignIds(new Set());
+            tracker.track(batchIds, queued);
+          }}
         />
       )}
 
-      {showDuplicateAdsetsModal && accountId && (
+      {showDuplicateAdsetsModal && (
         <DuplicateAdsetsModal
           selectedAdsets={adsets.filter(a => selectedAdsetIds.has(a.id))}
           accountId={accountId} bmId={bmId}
@@ -883,7 +1172,7 @@ function ManagerInner() {
         />
       )}
 
-      {showDuplicateAdsModal && accountId && (
+      {showDuplicateAdsModal && (
         <DuplicateAdsModal
           selectedAds={ads.filter(a => selectedAdIds.has(a.id)).map(a => ({ name: a.name, creativeId: a.creative_id ?? "" })).filter(a => a.creativeId)}
           accountId={accountId} bmId={bmId}
@@ -896,8 +1185,9 @@ function ManagerInner() {
 }
 
 // ─── Vista GLOBAL: campañas de TODAS las cuentas (carga progresiva) ─────────────
-interface GAcct { id: string; name: string; account_status: number; bmId: string }
-interface GRow { camp: Campaign; accId: string; accName: string; bmId: string }
+interface GAcct { id: string; name: string; account_status: number; bmId: string; currency?: string }
+interface GRow { camp: Campaign; accId: string; accName: string; bmId: string; currency?: string }
+interface AcctProblem { accName: string; info: ErrorInfo }
 
 function GlobalCampaignsView() {
   const router = useRouter();
@@ -907,49 +1197,84 @@ function GlobalCampaignsView() {
   const [total, setTotal] = useState(0);
   const [done, setDone] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [datePreset, setDatePreset] = useState("last_7d");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ACTIVE");
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>({ key: "spend", dir: "desc" });
+  const [oldest, setOldest] = useState<string | null>(null);
+  const [problems, setProblems] = useState<AcctProblem[]>([]);
+  const [showProblems, setShowProblems] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [dupTargets, setDupTargets] = useState<GRow[] | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   // Invalida corridas viejas (StrictMode monta el efecto 2× en dev y dispararía cargas duplicadas).
   const runId = useRef(0);
 
-  const run = useCallback(async () => {
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const run = useCallback(async (refresh = false) => {
     const myRun = ++runId.current;
-    setLoading(true); setRows([]); setInsMap({}); setDone(0);
+    setLoading(true); setRefreshing(refresh); setRows([]); setInsMap({}); setDone(0); setOldest(null); setProblems([]);
     let accs: GAcct[] = [];
-    try { accs = ((await fetch("/api/meta/accounts").then(r => r.json())).accounts ?? []) as GAcct[]; } catch { }
+    try {
+      const res = await fetch("/api/meta/accounts");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) toastApiError(json, "No se pudo cargar la lista de cuentas");
+      accs = (json.accounts ?? []) as GAcct[];
+    } catch {
+      toast.error("No se pudo conectar con el servidor");
+    }
     if (myRun !== runId.current) return; // otra corrida la reemplazó
     setAccounts(accs);
     const active = accs.filter(a => a.account_status === 1);
     setTotal(active.length);
-    // Progresivo: cada cuenta agrega sus campañas+insights apenas llega (rate-limit es por cuenta).
-    await Promise.all(active.map(async (acc) => {
+    const r = refresh ? "&refresh=true" : "";
+    // Progresivo y acotado: pocas cuentas a la vez (el rate limit de Meta es por cuenta
+    // y por app); «Traer de Meta» va aún más despacio porque salta las copias guardadas.
+    await runPool(active, refresh ? 3 : 6, async (acc) => {
       const rawId = acc.id.replace("act_", "");
       try {
-        const [cj, ij] = await Promise.all([
-          fetch(`/api/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`).then(r => r.json()),
-          fetch(`/api/meta/insights?accountId=${rawId}&level=campaign&datePreset=${datePreset}&bmId=${acc.bmId}`).then(r => r.json()),
+        const [cRes, iRes] = await Promise.all([
+          fetch(`/api/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}${r}`),
+          fetch(`/api/meta/insights?accountId=${rawId}&level=campaign&datePreset=${datePreset}&bmId=${acc.bmId}${r}`),
         ]);
+        const [cj, ij] = await Promise.all([cRes.json().catch(() => ({})), iRes.json().catch(() => ({}))]);
         if (myRun !== runId.current) return; // descartar respuestas de corrida obsoleta
+        for (const [res, j] of [[cRes, cj], [iRes, ij]] as const) {
+          if (!res.ok || j.stale) {
+            const info = errorInfoOf(j) ?? { title: j.error ?? j.staleReason ?? "Error" };
+            setProblems(p => [...p, { accName: acc.name, info: j.stale ? { ...info, title: `Datos guardados: ${info.title}` } : info }]);
+          }
+        }
+        const synced = [cj.syncedAt, ij.syncedAt].filter(Boolean) as string[];
+        if (synced.length) setOldest(prev => [prev, ...synced].filter(Boolean).sort()[0] ?? null);
         const camps: Campaign[] = cj.campaigns ?? [];
         const ins: Array<Insights & { campaign_id?: string }> = ij.data ?? [];
         if (ins.length) setInsMap(prev => { const n = { ...prev }; for (const it of ins) if (it.campaign_id) n[it.campaign_id] = it; return n; });
         if (camps.length) setRows(prev => {
           // dedupe por accId:campId (misma cuenta puede aparecer en 2 BMs)
-          const seen = new Set(prev.map(r => `${r.accId}:${r.camp.id}`));
+          const seen = new Set(prev.map(x => `${x.accId}:${x.camp.id}`));
           const fresh = camps
             .filter(c => !seen.has(`${rawId}:${c.id}`))
-            .map(c => ({ camp: c, accId: rawId, accName: acc.name, bmId: acc.bmId }));
+            .map(c => ({ camp: c, accId: rawId, accName: acc.name, bmId: acc.bmId, currency: acc.currency }));
           return fresh.length ? [...prev, ...fresh] : prev;
         });
-      } catch { }
+      } catch {
+        setProblems(p => [...p, { accName: acc.name, info: { kind: "network", title: "No se pudo conectar con el servidor" } }]);
+      }
       if (myRun === runId.current) setDone(d => d + 1);
-    }));
-    if (myRun === runId.current) setLoading(false);
+    });
+    if (myRun === runId.current) { setLoading(false); setRefreshing(false); }
   }, [datePreset]);
 
   useEffect(() => { run(); }, [run]);
+
+  const tracker = useBatchTracker(() => { void run(true); });
 
   const toggleSort = (key: string) => setSort(s => s?.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" });
 
@@ -971,6 +1296,25 @@ function GlobalCampaignsView() {
       const va = val(a), vb = val(b);
       return typeof va === "string" && typeof vb === "string" ? va.localeCompare(vb) * dir : ((va as number) - (vb as number)) * dir;
     });
+  }
+
+  const keyOf = (r: GRow) => `${r.accId}:${r.camp.id}`;
+  const visKeys = vis.map(keyOf);
+  const allSel = visKeys.length > 0 && visKeys.every(k => selected.has(k));
+  const someSel = visKeys.some(k => selected.has(k));
+  const selRows = rows.filter(r => selected.has(keyOf(r)));
+  const toggleOne = (k: string) => setSelected(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+
+  async function bulk(status: EntityStatus) {
+    setBulkBusy(true);
+    try {
+      const res = await bulkStatus(selRows.map(r => ({ id: r.camp.id, accountId: r.accId, bmId: r.bmId })), "campaign", status);
+      const ok = new Set(res.ok);
+      setRows(prev => prev.map(r => ok.has(r.camp.id) ? { ...r, camp: { ...r.camp, status } } : r));
+      reportBulk(res, status);
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   const arrow = (key: string) => sort?.key === key ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
@@ -997,7 +1341,10 @@ function GlobalCampaignsView() {
             <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none"><SelectValue /></SelectTrigger>
             <SelectContent>{DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
           </Select>
-          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={run} disabled={loading}><RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /></Button>
+          <FreshnessBar
+            freshness={{ syncedAt: oldest, source: refreshing ? "meta" : "db" }}
+            now={now} loading={loading} onRefresh={() => run(true)}
+          />
         </div>
       </div>
 
@@ -1011,45 +1358,115 @@ function GlobalCampaignsView() {
           <SelectContent>{STATUS_OPTS.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}</SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground ml-1">
-          {loading ? `Cargando ${done}/${total} cuentas…` : `${vis.length} campañas · ${total} cuentas`}
+          {loading ? `${refreshing ? "Trayendo de Meta" : "Cargando"} ${done}/${total} cuentas…` : `${vis.length} campañas · ${total} cuentas`}
         </span>
+        {problems.length > 0 && (
+          <button className="inline-flex items-center gap-1 text-xs text-amber-700 hover:underline" onClick={() => setShowProblems(s => !s)}>
+            <AlertTriangle className="h-3.5 w-3.5" /> {problems.length} aviso{problems.length > 1 ? "s" : ""} de cuentas
+          </button>
+        )}
+        <Button variant="outline" size="sm" className="h-8 text-xs ml-auto" onClick={() => router.push("/meta/jobs")}>
+          <Briefcase className="h-3.5 w-3.5 mr-1" /> Trabajos
+        </Button>
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow className="border-b">
-            <TableHead className={`py-2 text-[10px] font-semibold min-w-[220px] cursor-pointer select-none hover:text-foreground ${sort?.key === "name" ? "text-primary" : ""}`} onClick={() => toggleSort("name")}>NOMBRE{arrow("name")}</TableHead>
-            <TableHead className={`py-2 text-[10px] font-semibold min-w-[140px] cursor-pointer select-none hover:text-foreground ${sort?.key === "account" ? "text-primary" : ""}`} onClick={() => toggleSort("account")}>CUENTA{arrow("account")}</TableHead>
-            {sh("sales", "SALES", "w-12")}{sh("spend", "SPEND", "w-20")}{sh("revenue", "REVENUE", "w-20")}{sh("profit", "PROFIT", "w-20")}{sh("cpa", "CPA", "w-20")}{sh("roi", "ROI", "w-14")}{sh("cpm", "CPM", "w-20")}{sh("cpc", "CPC", "w-20")}{sh("ctr", "CTR", "w-14")}{sh("uctr", "U-CTR", "w-14")}{sh("ic", "IC", "w-16")}{sh("costPerIc", "$/IC", "w-20")}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {vis.length === 0 ? (
-            <TableRow><TableCell colSpan={14} className="text-center py-16 text-muted-foreground text-sm">{loading ? "Cargando…" : "Sin campañas"}</TableCell></TableRow>
-          ) : vis.map(r => {
-            const ins = insMap[r.camp.id];
-            const m = calcMetrics(ins);
-            return (
-              <TableRow key={`${r.accId}:${r.camp.id}`} className={`cursor-pointer ${rowColorClass(ins, true)}`} onClick={() => router.push(`/meta/campaigns?accountId=${r.accId}&bmId=${r.bmId}`)}>
-                <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1">{r.camp.name}</span></TableCell>
-                <TableCell className="py-2"><span className="text-[11px] text-muted-foreground line-clamp-1">{r.accName}</span></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtI(m?.sales ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtC(m?.spend ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtC(m?.revenue ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><ProfitCell v={m?.profit ?? 0} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpa ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><RoiCell v={m?.roi ?? 0} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpm ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpc ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtP(m?.ctr ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtP(m?.uctr ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtI(m?.ic ?? 0)} loading={false} /></TableCell>
-                <TableCell className="py-2 text-right"><MC v={fmtC(m?.costPerIc ?? 0)} loading={false} /></TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+      {showProblems && problems.length > 0 && (
+        <div className="space-y-1.5 pb-2">
+          {problems.map((p, i) => (
+            <div key={i}>
+              <p className="text-[11px] text-muted-foreground mb-0.5">{p.accName}</p>
+              <ErrorDetails info={p.info} variant="warning" compact />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={() => router.push("/meta/jobs")} />
+
+      <SelectionBar
+        count={selected.size} noun="campaña" busy={bulkBusy}
+        onDuplicate={() => setDupTargets(selRows)}
+        onStatus={bulk}
+        onClear={() => setSelected(new Set())}
+      />
+
+      <div className="rounded-lg border bg-white shadow-sm overflow-x-auto">
+        <Table className="w-full min-w-[1300px]">
+          <TableHeader>
+            <TableRow className="border-b">
+              <TableHead className="py-2 w-8">
+                <Checkbox checked={allSel} indeterminate={someSel} label="Seleccionar todo"
+                  onToggle={() => setSelected(allSel ? new Set() : new Set(visKeys))} />
+              </TableHead>
+              <TableHead className={`py-2 text-[10px] font-semibold min-w-[220px] cursor-pointer select-none hover:text-foreground ${sort?.key === "name" ? "text-primary" : ""}`} onClick={() => toggleSort("name")}>NOMBRE{arrow("name")}</TableHead>
+              <TableHead className={`py-2 text-[10px] font-semibold min-w-[140px] cursor-pointer select-none hover:text-foreground ${sort?.key === "account" ? "text-primary" : ""}`} onClick={() => toggleSort("account")}>CUENTA{arrow("account")}</TableHead>
+              {sh("sales", "SALES", "w-12")}{sh("spend", "SPEND", "w-20")}{sh("revenue", "REVENUE", "w-20")}{sh("profit", "PROFIT", "w-20")}{sh("cpa", "CPA", "w-20")}{sh("roi", "ROI", "w-14")}{sh("cpm", "CPM", "w-20")}{sh("cpc", "CPC", "w-20")}{sh("ctr", "CTR", "w-14")}{sh("uctr", "U-CTR", "w-14")}{sh("ic", "IC", "w-16")}{sh("costPerIc", "$/IC", "w-20")}
+              <TableHead className="py-2 text-[10px] font-semibold w-20">STATUS</TableHead>
+              <TableHead className="py-2 text-[10px] font-semibold w-28 text-right">ACCIONES</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {vis.length === 0 ? (
+              <TableRow><TableCell colSpan={18} className="text-center py-16 text-muted-foreground text-sm">{loading ? "Cargando…" : "Sin campañas"}</TableCell></TableRow>
+            ) : vis.map(r => {
+              const ins = insMap[r.camp.id];
+              const m = calcMetrics(ins);
+              const k = keyOf(r);
+              return (
+                <TableRow key={k} className={`group cursor-pointer ${rowColorClass(ins, true)}`} onClick={() => router.push(`/meta/campaigns?accountId=${r.accId}&bmId=${r.bmId}`)}>
+                  <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                    <Checkbox checked={selected.has(k)} onToggle={() => toggleOne(k)} label={`Seleccionar ${r.camp.name}`} />
+                  </TableCell>
+                  <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1 group-hover:text-primary" title={r.camp.name}>{r.camp.name}</span></TableCell>
+                  <TableCell className="py-2"><span className="text-[11px] text-muted-foreground line-clamp-1">{r.accName}</span></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtI(m?.sales ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.spend ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.revenue ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><ProfitCell v={m?.profit ?? 0} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpa ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><RoiCell v={m?.roi ?? 0} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpm ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpc ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtP(m?.ctr ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtP(m?.uctr ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtI(m?.ic ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.costPerIc ?? 0)} loading={false} /></TableCell>
+                  <TableCell className="py-2">
+                    <Badge variant={r.camp.status === "ACTIVE" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">{r.camp.status}</Badge>
+                  </TableCell>
+                  <TableCell className="py-2">
+                    <div className="flex items-center justify-end gap-0.5" onClick={e => e.stopPropagation()}>
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar campaña" onClick={() => setDupTargets([r])}>
+                        <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
+                      </Button>
+                      <a
+                        href={adsManagerUrl("campaign", r.accId, r.camp.id)} target="_blank" rel="noreferrer"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                        title="Abrir en Ads Manager"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+
+      {dupTargets && dupTargets.length > 0 && (
+        <DuplicateCampaignModal
+          campaigns={dupTargets.map(r => ({ ...r.camp, accountId: r.accId, bmId: r.bmId }))}
+          currency={dupTargets.length === 1 ? dupTargets[0].currency : undefined}
+          onClose={() => setDupTargets(null)}
+          onSuccess={({ batchIds, queued }) => {
+            setDupTargets(null);
+            setSelected(new Set());
+            tracker.track(batchIds, queued);
+          }}
+        />
+      )}
     </div>
   );
 }
