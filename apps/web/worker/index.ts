@@ -320,10 +320,9 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
       }
     }
     const opts = { removeOnComplete: true, removeOnFail: true };
-    await syncQueue.add(JOB_TYPES.SYNC_DASHBOARD, {}, opts);
+    // Los schedulers con `every` ya lanzan una pasada inmediata al crearse/actualizarse.
     await syncQueue.upsertJobScheduler("sync-dashboard", { every: 20 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, opts });
-    // Listados (campañas/adsets/ads/insights): inmediato + cada 30 min.
-    await syncQueue.add(JOB_TYPES.SYNC_LISTINGS, {}, opts);
+    // Listados (campañas/adsets/ads/insights): cada 30 min.
     await syncQueue.upsertJobScheduler("sync-listings", { every: 30 * 60 * 1000 }, { name: JOB_TYPES.SYNC_LISTINGS, opts });
     // Fanpages: una vez al día a las 5:00 AM (hora Colombia); el botón "Sincronizar" cubre lo urgente.
     await syncQueue.upsertJobScheduler("sync-fanpages", { pattern: "0 5 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_FANPAGES, opts });
