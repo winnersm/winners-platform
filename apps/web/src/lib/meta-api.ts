@@ -499,7 +499,7 @@ async function createAdsBatched(
   progFrom: number,
   progTo: number,
   checkCancelled?: () => Promise<void>,
-  opts: { dedupFirst?: boolean; issues?: DuplicateIssue[] } = {}
+  opts: { dedupFirst?: boolean; issues?: DuplicateIssue[]; stopOnRateLimit?: boolean } = {}
 ): Promise<{ adsOk: number; failed: AdToCreate[] }> {
   const total = items.length;
   let adsOk = 0;
@@ -531,14 +531,20 @@ async function createAdsBatched(
           results = await metaBatch(token, adsetIds.map((id) => ({
             method: "GET" as const, relative_url: `${id}/ads?fields=name&limit=200`,
           })));
-        } catch {
+        } catch (e) {
+          if (opts.stopOnRateLimit && e instanceof MetaApiError && isRateLimitKind(e.kind)) throw e;
           for (const id of adsetIds) stillPending.push(...itemsOf(id)); // batch GET falló entero (probable 17) → reintentar todos
           sawRateLimit = true;
           continue;
         }
         results.forEach((r, i) => {
           const adsetId = adsetIds[i];
-          if (r.code !== 200) { stillPending.push(...itemsOf(adsetId)); return; }
+          if (r.code !== 200) {
+            const err = batchError(r, `GET ${adsetId}/ads`);
+            if (opts.stopOnRateLimit && isRateLimitKind(err.kind)) throw err;
+            stillPending.push(...itemsOf(adsetId));
+            return;
+          }
           const body = r.body as { data?: Array<{ name: string }> } | null;
           const { found, missing } = splitExistingAds(
             itemsOf(adsetId), (body?.data ?? []).map((a) => a.name),
@@ -575,7 +581,9 @@ async function createAdsBatched(
           counted.set(countKey(it.newId, it.name), (counted.get(countKey(it.newId, it.name)) ?? 0) + 1);
         } else if (isTransientAdError(body?.error?.code, body?.error?.error_subcode, r.code)) {
           if (body?.error?.code === 17) sawRateLimit = true;
-          lastError.set(it, batchError(r, `POST act_${accountId}/ads`));
+          const err = batchError(r, `POST act_${accountId}/ads`);
+          if (opts.stopOnRateLimit && isRateLimitKind(err.kind)) throw err;
+          lastError.set(it, err);
           nextPending.push(it);
         } else {
           const err = body?.error;
@@ -1065,6 +1073,9 @@ async function fetchAdsetSpecs(adsetIds: string[], token: string, issues: Duplic
       const a = r.body as Record<string, unknown> | null;
       if (r.code !== 200 || !a || (a as { error?: unknown }).error) {
         console.error(`[fromscratch] No se pudo leer adset ${id}: ${JSON.stringify((a as { error?: unknown })?.error)}`);
+        // Por cuota no se omite el ad set: saldría una copia incompleta sin motivo real.
+        const err = batchError(r, `GET ${id}`);
+        if (isRateLimitKind(err.kind)) throw err;
         return;
       }
       const edge = a.ads as {
@@ -1098,6 +1109,8 @@ async function createAdsetsFromScratch(
   accountId: string, token: string, campaignId: string,
   specs: { spec: AdsetSpec; name: string }[],
   issues: DuplicateIssue[] = [],
+  /** Job reanudable: ante cuota, cortar para que el worker lo pause y siga luego. */
+  stopOnRateLimit = false,
 ): Promise<ReadyAdset[]> {
   const created: ReadyAdset[] = [];
   let pending = [...specs];
@@ -1117,7 +1130,7 @@ async function createAdsetsFromScratch(
         }));
       } catch (e) {
         // El batch falló entero: si es definitivo (token, permiso) no tiene sentido seguir.
-        if (e instanceof MetaApiError && !e.retryable) throw e;
+        if (e instanceof MetaApiError && (!e.retryable || (stopOnRateLimit && isRateLimitKind(e.kind)))) throw e;
         for (const it of group) if (e instanceof MetaApiError) lastError.set(it, e);
         next.push(...group); // probable rate limit → reintentar todos
         continue;
@@ -1130,6 +1143,7 @@ async function createAdsetsFromScratch(
           return;
         }
         const err = batchError(r, `POST act_${accountId}/adsets`);
+        if (stopOnRateLimit && isRateLimitKind(err.kind)) throw err;
         // 960 = Meta abortó el batch por culpa de otro sub-request → reintentable.
         if (err.retryable || err.detail.code === 960) {
           lastError.set(item, err);
@@ -1169,6 +1183,27 @@ export interface DuplicateResult {
   adsExpected?: number;
   resumed?: boolean;
   issues?: DuplicateIssue[];
+}
+
+// La configuración de la campaña original se lee una vez y la reutilizan todas
+// las copias de la tanda: así 50 copias no leen 50 veces lo mismo.
+const SOURCE_TTL = 1800;
+interface CampaignSource { adsetCount: number; specs: AdsetSpec[]; issues: DuplicateIssue[] }
+
+async function readCampaignSource(campaignId: string, token: string): Promise<CampaignSource> {
+  const key = `meta:dup-source:${campaignId}`;
+  const cached = await redis.get(key).catch(() => null);
+  if (cached) return JSON.parse(cached) as CampaignSource;
+
+  const adsetsJson = await metaGet(`${campaignId}/adsets`, token, { fields: "id", limit: "200" }, 1);
+  const ids: string[] = (adsetsJson.data ?? []).map((a: { id: string }) => a.id);
+  if (ids.length === 0) throw new Error("La campaña original no tiene ad sets: no hay nada que copiar");
+  const issues: DuplicateIssue[] = [];
+  const specs = await fetchAdsetSpecs(ids, token, issues);
+  if (specs.length === 0) throw new Error("No se pudo leer la configuración de ningún ad set de la campaña original");
+  const source = { adsetCount: ids.length, specs, issues };
+  await redis.setex(key, SOURCE_TTL, JSON.stringify(source)).catch(() => {});
+  return source;
 }
 
 export interface DuplicateCampaignOpts {
@@ -1220,25 +1255,23 @@ export async function duplicateCampaign(
 
   // Fase 2: Leer config completa de los adsets originales (+ creative por adset) — FROM SCRATCH.
   await cb(15, "Leyendo adsets originales...");
-  const adsetsJson = await metaGet(`${campaignId}/adsets`, token, { fields: "id", limit: "200" }, 8);
-  const origAdsetIds: string[] = (adsetsJson.data ?? []).map((a: { id: string }) => a.id);
-  if (origAdsetIds.length === 0) throw new Error("La campaña original no tiene ad sets: no hay nada que copiar");
-  const specs = await fetchAdsetSpecs(origAdsetIds, token, issues);
-  if (specs.length === 0) throw new Error("No se pudo leer la configuración de ningún ad set de la campaña original");
-  if (specs.length < origAdsetIds.length) {
+  const source = await readCampaignSource(campaignId, token);
+  const { specs } = source;
+  issues.push(...source.issues);
+  if (specs.length < source.adsetCount) {
     issues.push({
-      step: "adset", name: `${origAdsetIds.length - specs.length} ad set(s) sin anuncio o ilegibles`,
+      step: "adset", name: `${source.adsetCount - specs.length} ad set(s) sin anuncio o ilegibles`,
       error: serializeError(new Error("Se omitieron porque no tienen un anuncio con creativo que reutilizar")),
     });
   }
-  console.log(`[duplicate] Config leída de ${specs.length}/${origAdsetIds.length} adsets`);
+  console.log(`[duplicate] Config lista de ${specs.length}/${source.adsetCount} adsets`);
   if (checkCancelled) await checkCancelled();
 
   // Al reanudar, los ad sets que ya existen en la copia (mismo nombre) no se recrean.
   let work = specs.map((s) => ({ spec: s, name: s.adsetName }));
   const existing: ReadyAdset[] = [];
   if (resumed) {
-    const cur = await metaGet(`${newCampaignId}/adsets`, token, { fields: "id,name", limit: "200" });
+    const cur = await metaGet(`${newCampaignId}/adsets`, token, { fields: "id,name", limit: "200" }, 1);
     const pool = [...((cur.data ?? []) as Array<{ id: string; name: string }>)];
     work = work.filter((w) => {
       const idx = pool.findIndex((a) => a.name === w.name);
@@ -1254,7 +1287,7 @@ export async function duplicateCampaign(
   await cb(30, `Creando ${work.length} adsets (desde cero)...`);
   const createdAdsets = [
     ...existing,
-    ...(work.length ? await createAdsetsFromScratch(accountId, token, newCampaignId, work, issues) : []),
+    ...(work.length ? await createAdsetsFromScratch(accountId, token, newCampaignId, work, issues, true) : []),
   ];
   const adsetsOk = createdAdsets.length;
   console.log(`[duplicate] ${adsetsOk}/${specs.length} adsets listos (from scratch${resumed ? ", reanudado" : ""})`);
@@ -1264,7 +1297,7 @@ export async function duplicateCampaign(
   await cb(55, "Creando ads (de a 2)...");
   const adItems = toAdItems(createdAdsets);
   const { adsOk, failed } = await createAdsBatched(accountId, token, adItems, cb, 55, 96, checkCancelled, {
-    dedupFirst: resumed, issues,
+    dedupFirst: resumed, issues, stopOnRateLimit: true,
   });
   console.log(`[duplicate] FIN | ${adsetsOk} adsets, ${adsOk}/${adItems.length} ads | ${failed.length} fallidos`);
 

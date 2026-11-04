@@ -45,6 +45,11 @@ function releaseAccount(accountId?: string): void {
 /** Tipos que se pueden reanudar sin duplicar nada (tienen punto de control). */
 const RESUMABLE = new Set<string>([JOB_TYPES.DUPLICATE_CAMPAIGN]);
 
+// Pausas ante un límite de Meta: cada vez más largas, porque el medidor de cuota
+// no siempre avisa cuándo se libera. En total, ~2 h 20 min antes de rendirse.
+const RATE_LIMIT_WAITS_SEC = [60, 120, 300, 600, 900];
+const MAX_RATE_LIMIT_PAUSES = 12;
+
 // Marca de cancelación: el catch la distingue de un fallo real para no pisar el estado "cancelled".
 class CancelledError extends Error {
   constructor() {
@@ -91,13 +96,16 @@ async function processSyncJob(bullJob: BullJob) {
 }
 
 /** Deja el job en espera con un motivo visible y lo reprograma. */
-async function postpone(bullJob: BullJob, token: string | undefined, jobId: string, delayMs: number, reason: string) {
+async function postpone(
+  bullJob: BullJob, token: string | undefined, jobId: string, delayMs: number, reason: string,
+  extra: Record<string, unknown> = {},
+) {
   const until = new Date(Date.now() + delayMs).toISOString();
   const row = await prisma.metaJob.findUnique({ where: { id: jobId }, select: { output: true } });
   const prev = (row?.output ?? {}) as Record<string, unknown>;
   await prisma.metaJob.update({
     where: { id: jobId },
-    data: { status: "pending", output: { ...prev, waiting: { reason, until } } as Prisma.InputJsonValue },
+    data: { status: "pending", output: { ...prev, ...extra, waiting: { reason, until } } as Prisma.InputJsonValue },
   });
   await bullJob.moveToDelayed(Date.now() + delayMs, token);
   throw new DelayedError();
@@ -260,13 +268,19 @@ async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[], token?:
 
     // Rate limit largo en un job reanudable → enfriar la cuenta y reprogramar el
     // job: continuará sobre lo ya creado (punto de control) en vez de fallar.
-    if (metaErr instanceof MetaApiError && isRateLimitKind(metaErr.kind) && RESUMABLE.has(bullJob.name)) {
-      const waitSec = Math.max(60, metaErr.detail.retryAfterSec ?? 0);
+    const pauses = Number(prevOutput.pauses ?? 0);
+    const rateLimited = metaErr instanceof MetaApiError && isRateLimitKind(metaErr.kind);
+    if (rateLimited && RESUMABLE.has(bullJob.name) && pauses >= MAX_RATE_LIMIT_PAUSES) {
+      serialized.action = "Meta mantuvo el límite durante más de 2 horas. Vuelve a lanzar esta copia más tarde.";
+    }
+    if (rateLimited && RESUMABLE.has(bullJob.name) && pauses < MAX_RATE_LIMIT_PAUSES) {
+      const planned = RATE_LIMIT_WAITS_SEC[Math.min(pauses, RATE_LIMIT_WAITS_SEC.length - 1)];
+      const waitSec = Math.max(planned, metaErr.detail.retryAfterSec ?? 0);
       const accountId: string | undefined = bullJob.data.accountId;
       if (accountId) await setAccountCooldown(accountId, waitSec, `Meta limitó la cuenta (código ${metaErr.detail.code})`);
       logs.push({ ts: new Date().toISOString(), msg: `PAUSA: ${serialized.title}. Se reanuda en ~${Math.ceil(waitSec / 60)} min sin repetir lo ya creado.` });
       await prisma.metaJob.update({ where: { id: jobId }, data: { logs } });
-      await postpone(bullJob, token, jobId, waitSec * 1000, `${serialized.title}. Se reanuda solo en ~${Math.ceil(waitSec / 60)} min.`);
+      await postpone(bullJob, token, jobId, waitSec * 1000, `${serialized.title}. Se reanuda solo en ~${Math.ceil(waitSec / 60)} min.`, { pauses: pauses + 1 });
     }
 
     const d = serialized.detail;
