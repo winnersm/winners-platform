@@ -130,7 +130,7 @@ export function WaitingNote({ reason, until }: { reason: string; until?: string 
   return (
     <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
       <Clock className="h-3 w-3" />
-      {reason}{mins != null && mins > 0 ? ` (≈${mins} min)` : ""}
+      {reason}{mins != null && mins > 0 && !/\bmin\b/.test(reason) ? ` (≈${mins} min)` : ""}
     </span>
   );
 }

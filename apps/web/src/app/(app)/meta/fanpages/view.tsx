@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { notifyJobsChanged, openJobsDock } from "@/lib/jobs-dock-events";
 import {
   Contact, RefreshCw, Search, ArrowDownAZ, ArrowUpZA, Copy, Check,
   KeyRound, Loader2, Sparkles, Download, ShieldCheck, Megaphone, ExternalLink,
@@ -183,7 +183,6 @@ function PbiaCell({ state, onCreate, creating }: { state: string | null | undefi
 // ─── Página ──────────────────────────────────────────────────────────────────
 export default function FanpagesView() {
 
-  const router = useRouter();
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [tokenName, setTokenName] = useState<string>("");
   const [pages, setPages] = useState<FanPage[]>([]);
@@ -254,15 +253,16 @@ export default function FanpagesView() {
       const res = await fetch("/api/fanpages/ads/sync", { method: "POST" });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Error"); return; }
+      notifyJobsChanged();
       toast.success("Contando ads activos… (job en segundo plano)", {
-        action: { label: "Ver trabajos", onClick: () => router.push("/meta/jobs") },
+        action: { label: "Ver trabajos", onClick: openJobsDock },
       });
     } catch {
       toast.error("Error de red");
     } finally {
       setSyncingAds(false);
     }
-  }, [router]);
+  }, []);
 
   useEffect(() => { loadToken(); }, [loadToken]);
   useEffect(() => { if (configured) loadPages(); }, [configured, loadPages]);
@@ -363,9 +363,10 @@ export default function FanpagesView() {
         queued += json.count;
       }
       if (queued > 0) {
+        notifyJobsChanged();
         toast.success(
           `${chunks.length > 1 ? `${chunks.length} trabajos encolados` : "Trabajo encolado"} — creando PBIA de ${queued} páginas${skipped > 0 ? ` (${skipped} ya tenían)` : ""}`,
-          { action: { label: "Ver trabajos", onClick: () => router.push("/meta/jobs") } }
+          { action: { label: "Ver trabajos", onClick: openJobsDock } }
         );
         setSel(new Set());
       }

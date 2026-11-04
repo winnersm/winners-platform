@@ -9,7 +9,20 @@ export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
-  const batchId = new URL(req.url).searchParams.get("batchId");
+  const params = new URL(req.url).searchParams;
+  // ?summary=1 → solo contadores: el panel flotante lo consulta desde todas las
+  // pantallas, y traer el historial con sus logs en cada consulta sería pesado.
+  if (params.get("summary")) {
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    const [active, failed, lastFailed] = await Promise.all([
+      prisma.metaJob.count({ where: { status: { in: ["pending", "processing"] } } }),
+      prisma.metaJob.count({ where: { status: "failed", updatedAt: { gte: since } } }),
+      prisma.metaJob.findFirst({ where: { status: "failed" }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } }),
+    ]);
+    return NextResponse.json({ active, failed, lastFailedAt: lastFailed?.updatedAt ?? null });
+  }
+
+  const batchId = params.get("batchId");
   const jobs = await prisma.metaJob.findMany({
     where: batchId ? { input: { path: ["batchId"], equals: batchId } } : undefined,
     orderBy: { createdAt: "desc" },

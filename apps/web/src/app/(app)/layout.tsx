@@ -7,7 +7,9 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { OperationSwitcher } from "@/components/operation-switcher";
+import { JobsDock } from "@/components/jobs-dock";
 import { requireUser } from "@/lib/guards";
+import { canScope } from "@winners/auth";
 
 export default async function AppLayout({
   children,
@@ -39,8 +41,9 @@ export default async function AppLayout({
           <OperationSwitcher />
           <ThemeToggle />
         </header>
-        <main className="min-w-0 flex-1 p-5">{children}</main>
+        <main className="min-w-0 flex-1 p-5 pb-16">{children}</main>
       </SidebarInset>
+      {canScope(user, "META", "jobs") && <JobsDock />}
     </SidebarProvider>
   );
 }

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { notifyJobsChanged, openJobsDock } from "@/lib/jobs-dock-events";
 import { Copy, RefreshCw, AlertCircle, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,7 +35,6 @@ export function DuplicateAdsModal({ selectedAds, accountId, bmId, onClose, onSuc
   const [loadingAdsets, setLoadingAdsets] = useState(false);
   const [count, setCount] = useState(1);
   const [saving, setSaving] = useState(false);
-  const router = useRouter();
 
   useEffect(() => {
     async function load() {
@@ -87,9 +86,10 @@ export function DuplicateAdsModal({ selectedAds, accountId, bmId, onClose, onSuc
     const json = await res.json();
     setSaving(false);
     if (!res.ok) { toast.error(json.error ?? "Error al encolar"); return; }
+    notifyJobsChanged();
     toast.success(
       `${json.queued} trabajo${json.queued > 1 ? "s" : ""} encolado${json.queued > 1 ? "s" : ""}`,
-      { action: { label: "Ver trabajos", onClick: () => router.push("/meta/jobs") } }
+      { action: { label: "Ver trabajos", onClick: openJobsDock } }
     );
     onSuccess();
   }

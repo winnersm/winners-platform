@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { notifyJobsChanged, openJobsDock } from "@/lib/jobs-dock-events";
 import { Copy, RefreshCw, Briefcase, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,7 +42,6 @@ function formatBudget(cents: string | undefined, currency = "USD") {
 }
 
 export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, onClose, onSuccess }: Props) {
-  const router = useRouter();
   const single = campaigns.length === 1 ? campaigns[0] : null;
 
   const [name, setName] = useState(single ? `[Copia] ${single.name}` : "");
@@ -94,11 +93,12 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
         batchIds.push(json.batchId);
         queued += json.queued;
       }
+      notifyJobsChanged();
       toast.success(
         `${queued} copia${queued > 1 ? "s" : ""} en cola`,
         {
           description: "Se procesan en orden, como máximo 2 a la vez por cuenta.",
-          action: { label: "Ver trabajos", onClick: () => router.push("/meta/jobs") },
+          action: { label: "Ver trabajos", onClick: openJobsDock },
         },
       );
       onSuccess({ batchIds, queued });
@@ -110,8 +110,6 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
   }
 
   const budget = single ? formatBudget(single.daily_budget ?? single.lifetime_budget, currency) : null;
-  // Estimación grosera: ~1 min por copia con 2 en paralelo por cuenta.
-  const etaMin = Math.max(1, Math.ceil(total / 2));
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
@@ -160,7 +158,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
               <Label>Estado al terminar</Label>
               <Select value={status} onValueChange={(v) => v && setStatus(v as "ACTIVE" | "PAUSED")}>
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>{status === "ACTIVE" ? "Activa" : "Pausada"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="PAUSED">Pausada</SelectItem>
@@ -182,7 +180,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
           {!countError && total > 1 && (
             <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2">
               Se crearán <strong>{total} copias</strong> en un lote numerado
-              {count > 1 ? <> («… (1)» a «… ({count})»)</> : null}. Tiempo estimado: ~{etaMin} min.
+              {count > 1 ? <> («… (1)» a «… ({count})»)</> : null}. Sigue el avance en esta pantalla o en Trabajos.
             </p>
           )}
 

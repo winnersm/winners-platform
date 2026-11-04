@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { notifyJobsChanged, openJobsDock } from "@/lib/jobs-dock-events";
 import { Copy, RefreshCw, AlertCircle, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,6 @@ export function DuplicateAdsetsModal({ selectedAdsets, accountId, bmId, onClose,
   const [targetCampaignId, setTargetCampaignId] = useState<string>(selectedAdsets[0]?.campaign_id ?? "");
   const [count, setCount] = useState(1);
   const [saving, setSaving] = useState(false);
-  const router = useRouter();
 
   const MAX_CLONES = 50;
   const maxCount = Math.max(1, Math.floor(MAX_CLONES / Math.max(1, selectedAdsets.length)));
@@ -75,9 +74,10 @@ export function DuplicateAdsetsModal({ selectedAdsets, accountId, bmId, onClose,
     const json = await res.json();
     setSaving(false);
     if (!res.ok) { toast.error(json.error ?? "Error al encolar"); return; }
+    notifyJobsChanged();
     toast.success(
       `Trabajo encolado — clonando ${json.totalClones ?? totalClones} adset(s)`,
-      { action: { label: "Ver trabajos", onClick: () => router.push("/meta/jobs") } }
+      { action: { label: "Ver trabajos", onClick: openJobsDock } }
     );
     onSuccess();
   }

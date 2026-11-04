@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback, Suspense, useRef } from "react";
+import { useEffect, useState, useCallback, Suspense, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   RefreshCw, Search, Copy, TrendingUp, Play, Pause, Briefcase, Building2,
-  ExternalLink, ChevronRight, X, CloudDownload, Loader2, CheckCircle2, AlertTriangle,
+  ExternalLink, ChevronRight, X, CloudDownload, Loader2, CheckCircle2, AlertTriangle, Columns3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,10 +16,15 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import {
+  DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { DuplicateCampaignModal } from "@/components/duplicate-campaign-modal";
 import { DuplicateAdsetsModal } from "@/components/duplicate-adsets-modal";
 import { DuplicateAdsModal } from "@/components/duplicate-ads-modal";
 import { ErrorDetails, errorInfoOf, toastApiError, type ErrorInfo } from "@/components/error-details";
+import { openJobsDock } from "@/lib/jobs-dock-events";
 import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -73,6 +78,18 @@ const STATUS_OPTS = [
 ];
 
 /** Presupuesto en la moneda real de la cuenta (Meta lo da en centavos). */
+const labelOf = (opts: Array<{ value: string; label: string }>, value: string) =>
+  opts.find(o => o.value === value)?.label ?? value;
+
+const ENTITY_STATUS: Record<string, string> = { ACTIVE: "Activo", PAUSED: "Pausado", ARCHIVED: "Archivado", DELETED: "Eliminado" };
+
+// Las acciones quedan siempre a la vista aunque la tabla se desplace en horizontal.
+const STICKY_ACTIONS = "md:sticky right-0 z-10 bg-card group-hover:bg-muted shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)]";
+// Casilla y nombre fijos a la izquierda. Solo en pantallas anchas: en móvil
+// ocuparían todo el ancho y no dejarían ver las métricas.
+const STICKY_CHECK = "w-8 min-w-8 max-w-8 xl:sticky xl:left-0 z-10 bg-card group-hover:bg-muted";
+const STICKY_NAME = "max-w-[280px] min-w-[240px] xl:sticky xl:left-8 z-10 bg-card group-hover:bg-muted xl:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)]";
+
 function fmtBudget(cents?: string, currency = "USD") {
   if (!cents) return "—";
   try {
@@ -82,8 +99,9 @@ function fmtBudget(cents?: string, currency = "USD") {
   }
 }
 
-function fmtC(n: number | null): string {
+function fmtC(n: number | null, currency = "USD"): string {
   const x = n ?? 0;
+  if (currency !== "USD") return `${currency} ${x.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`;
   return `$${x.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function fmtI(n: number | null): string {
@@ -171,18 +189,14 @@ function calcMetrics(ins: Insights | undefined) {
   return { spend, revenue, sales, profit, cpa, roi, cpm, cpc, ctr, uctr, ic, costPerIc };
 }
 
-const ROW_GREEN = "bg-green-50 border-l-4 border-l-green-400 hover:bg-green-100/60";
-const ROW_RED = "bg-red-50 border-l-4 border-l-red-400 hover:bg-red-100/60";
-const ROW_BLUE = "bg-blue-50 border-l-4 border-l-blue-400 hover:bg-blue-100/60";
-function rowColorClass(ins: Insights | undefined, loaded: boolean): string {
-  // Sin insights: si ya terminó de cargar = sin actividad (profit 0) → azul; si aún carga → neutro.
-  if (!ins) return loaded ? ROW_BLUE : "hover:bg-muted/30";
-  const spend = parseFloat(ins.spend || "0");
-  const revenue = getPurchaseRevenue(ins);
-  const profit = revenue - spend;
-  if (profit > 0) return ROW_GREEN;   // ganancia
-  if (profit < 0) return ROW_RED;     // pérdida
-  return ROW_BLUE;                    // profit 0
+// Resultado de la fila: una franja a la izquierda. El color de la fila entera
+// competía con los avisos de error; Profit y ROI ya llevan su propio color.
+function stripeClass(ins: Insights | undefined, loaded: boolean): string {
+  if (!ins) return loaded ? "shadow-[inset_3px_0_0_0_#60a5fa]" : "";
+  const profit = getPurchaseRevenue(ins) - parseFloat(ins.spend || "0");
+  if (profit > 0) return "shadow-[inset_3px_0_0_0_#4ade80]";
+  if (profit < 0) return "shadow-[inset_3px_0_0_0_#f87171]";
+  return "shadow-[inset_3px_0_0_0_#60a5fa]";
 }
 
 function Ldr({ loading }: { loading: boolean }) {
@@ -191,20 +205,20 @@ function Ldr({ loading }: { loading: boolean }) {
 
 // ¿El string formateado representa cero? ("0", "$0.00", "0.00%", "0%", "-$0.00")
 function isZeroStr(v: string): boolean {
-  return /^-?\$?0([.,]0+)?%?$/.test(v.trim());
+  return /^-?(?:[A-Z]{3} )?\$?0([.,]0+)?%?$/.test(v.trim());
 }
 function MC({ v, loading }: { v: string | null; loading: boolean }) {
   if (loading) return <Ldr loading />;
   const cls = (v == null || isZeroStr(v)) ? "text-muted-foreground/40" : "";
   return <span className={`text-xs tabular-nums ${cls}`}>{v ?? "—"}</span>;
 }
-function ProfitCell({ v, loading }: { v: number | null; loading: boolean }) {
+function ProfitCell({ v, loading, currency }: { v: number | null; loading: boolean; currency: string }) {
   if (loading) return <Ldr loading />;
   const val = v ?? 0;
-  if (val === 0) return <span className="text-xs tabular-nums text-muted-foreground/60">$0.00</span>;
+  if (val === 0) return <span className="text-xs tabular-nums text-muted-foreground/60">{fmtC(0, currency)}</span>;
   const pos = val > 0;
   return <span className={`text-xs tabular-nums font-medium ${pos ? "text-green-700" : "text-red-600"}`}>
-    {pos ? "" : "-"}{fmtC(Math.abs(val))}
+    {pos ? "" : "-"}{fmtC(Math.abs(val), currency)}
   </span>;
 }
 function RoiCell({ v, loading }: { v: number | null; loading: boolean }) {
@@ -217,24 +231,138 @@ function RoiCell({ v, loading }: { v: number | null; loading: boolean }) {
   </span>;
 }
 
-function MetricCells({ ins, loading }: { ins: Insights | undefined; loading: boolean }) {
-  const m = calcMetrics(ins);
+// ─── Columnas de métricas ─────────────────────────────────────────────────────
+
+type Metrics = NonNullable<ReturnType<typeof calcMetrics>>;
+interface ColumnDef {
+  key: keyof Metrics; label: string; title: string; w: string; money?: boolean;
+  cell: (m: Metrics | null, currency: string, loading: boolean) => ReactNode;
+}
+const money = (key: keyof Metrics): ColumnDef["cell"] => function MoneyCell(m, c, l) { return <MC v={fmtC(m?.[key] ?? 0, c)} loading={l} />; };
+const pct = (key: keyof Metrics): ColumnDef["cell"] => function PctCell(m, _c, l) {
+  const v = m?.[key] ?? 0;
+  return <MC v={Number.isNaN(v) ? "—" : fmtP(v)} loading={l} />; // NaN = no se puede sumar (U-CTR en totales)
+};
+const count = (key: keyof Metrics): ColumnDef["cell"] => function CountCell(m, _c, l) { return <MC v={fmtI(m?.[key] ?? 0)} loading={l} />; };
+
+const COLUMNS: ColumnDef[] = [
+  { key: "sales", label: "SALES", title: "Ventas", w: "w-12", cell: count("sales") },
+  { key: "spend", label: "SPEND", title: "Gasto", w: "w-20", money: true, cell: money("spend") },
+  { key: "revenue", label: "REVENUE", title: "Ingresos", w: "w-20", money: true, cell: money("revenue") },
+  { key: "profit", label: "PROFIT", title: "Profit", w: "w-20", money: true, cell: (m, c, l) => <ProfitCell v={m?.profit ?? 0} loading={l} currency={c} /> },
+  { key: "cpa", label: "CPA", title: "Costo por venta (CPA)", w: "w-20", money: true, cell: money("cpa") },
+  { key: "roi", label: "ROI", title: "ROI", w: "w-14", cell: (m, _c, l) => <RoiCell v={m?.roi ?? 0} loading={l} /> },
+  { key: "cpm", label: "CPM", title: "CPM", w: "w-20", money: true, cell: money("cpm") },
+  { key: "cpc", label: "CPC", title: "CPC", w: "w-20", money: true, cell: money("cpc") },
+  { key: "ctr", label: "CTR", title: "CTR", w: "w-14", cell: pct("ctr") },
+  { key: "uctr", label: "U-CTR", title: "CTR único", w: "w-14", cell: pct("uctr") },
+  { key: "ic", label: "IC", title: "Pagos iniciados (IC)", w: "w-16", cell: count("ic") },
+  { key: "costPerIc", label: "$/IC", title: "Costo por pago iniciado", w: "w-20", money: true, cell: money("costPerIc") },
+];
+const MONEY_KEYS = new Set<string>(COLUMNS.filter(c => c.money).map(c => c.key));
+const COLUMNS_STORAGE = "campaigns_columns";
+
+const columnListeners = new Set<() => void>();
+function subscribeColumns(cb: () => void) {
+  columnListeners.add(cb);
+  return () => { columnListeners.delete(cb); };
+}
+function readHiddenColumns(): string {
+  try { return localStorage.getItem(COLUMNS_STORAGE) ?? "[]"; } catch { return "[]"; }
+}
+function parseHidden(raw: string): Set<string> {
+  try { return new Set(JSON.parse(raw) as string[]); } catch { return new Set(); }
+}
+
+/** Columnas visibles, recordadas en este navegador. El servidor no conoce localStorage: renderiza todas. */
+function useColumns() {
+  const hidden = parseHidden(useSyncExternalStore(subscribeColumns, readHiddenColumns, () => "[]"));
+  const save = (next: Set<string>) => {
+    try { localStorage.setItem(COLUMNS_STORAGE, JSON.stringify([...next])); } catch { /* sin almacenamiento */ }
+    columnListeners.forEach(cb => cb());
+  };
+  return {
+    columns: COLUMNS.filter(c => !hidden.has(c.key)),
+    isVisible: (key: string) => !hidden.has(key),
+    toggle: (key: string) => { const n = parseHidden(readHiddenColumns()); if (n.has(key)) n.delete(key); else n.add(key); save(n); },
+    reset: () => save(new Set()),
+  };
+}
+
+function ColumnPicker({ state }: { state: ReturnType<typeof useColumns> }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={
+        <Button variant="outline" size="sm" className="h-8 text-xs bg-white">
+          <Columns3 className="h-3.5 w-3.5 mr-1" /> Columnas ({state.columns.length}/{COLUMNS.length})
+        </Button>
+      } />
+      <DropdownMenuContent align="end" className="w-56">
+        {COLUMNS.map(c => (
+          <DropdownMenuCheckboxItem key={c.key} className="text-xs" checked={state.isVisible(c.key)} onCheckedChange={() => state.toggle(c.key)}>
+            {c.title}
+          </DropdownMenuCheckboxItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-xs" onClick={state.reset}>Mostrar todas</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function MetricCells({ metrics, loading, columns, currency }: {
+  metrics: Metrics | null; loading: boolean; columns: ColumnDef[]; currency: string;
+}) {
   return (
     <>
-      <TableCell className="py-2 text-right"><MC v={fmtI(m?.sales ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtC(m?.spend ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtC(m?.revenue ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><ProfitCell v={m?.profit ?? 0} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpa ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><RoiCell v={m?.roi ?? 0} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpm ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpc ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtP(m?.ctr ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtP(m?.uctr ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtI(m?.ic ?? 0)} loading={loading} /></TableCell>
-      <TableCell className="py-2 text-right"><MC v={fmtC(m?.costPerIc ?? 0)} loading={loading} /></TableCell>
+      {columns.map(c => (
+        <TableCell key={c.key} className="py-2 text-right">{c.cell(metrics, currency, loading)}</TableCell>
+      ))}
     </>
   );
+}
+
+/** Suma de filas recalculando los derivados. factor = conversión a la moneda del total. */
+function sumMetrics(items: Array<{ ins: Insights | undefined; factor: number }>): Metrics {
+  let spend = 0, revenue = 0, sales = 0, ic = 0, impressions = 0, clicks = 0;
+  for (const { ins, factor } of items) {
+    const m = calcMetrics(ins);
+    if (!m || !ins) continue;
+    spend += m.spend * factor;
+    revenue += m.revenue * factor;
+    sales += m.sales;
+    ic += m.ic ?? 0;
+    impressions += parseFloat(ins.impressions || "0");
+    clicks += parseFloat(ins.clicks || "0");
+  }
+  const profit = revenue - spend;
+  return {
+    spend, revenue, sales, profit,
+    cpa: sales > 0 ? spend / sales : null,
+    roi: spend > 0 ? (profit / spend) * 100 : null,
+    cpm: impressions > 0 ? (spend / impressions) * 1000 : null,
+    cpc: clicks > 0 ? spend / clicks : null,
+    ctr: impressions > 0 ? (clicks / impressions) * 100 : null,
+    uctr: NaN, // necesitaría los clics únicos de toda la vista
+    ic: ic > 0 ? ic : null,
+    costPerIc: ic > 0 && spend > 0 ? spend / ic : null,
+  };
+}
+
+/** Tasas contra USD para sumar y ordenar monedas distintas. */
+function useFx() {
+  const [fx, setFx] = useState<{ rates: Record<string, number>; updatedAt: string | null; stale?: boolean } | null>(null);
+  useEffect(() => {
+    fetch("/api/fx").then(r => r.json()).then(j => { if (j?.rates) setFx(j); }).catch(() => { });
+  }, []);
+  /** Multiplicador a USD; null si no hay tasa para esa moneda. */
+  const toUsd = (currency: string | undefined): number | null => {
+    const c = currency ?? "USD";
+    if (c === "USD") return 1;
+    const r = fx?.rates[c];
+    return r ? 1 / r : null;
+  };
+  return { fx, toUsd };
 }
 
 function Checkbox({ checked, indeterminate, onToggle, label }: {
@@ -268,7 +396,7 @@ function StatusCell({
         variant={isActive ? "default" : status === "ARCHIVED" ? "outline" : "secondary"}
         className="text-[10px] px-1.5 py-0 shrink-0"
       >
-        {status}
+        {ENTITY_STATUS[status] ?? status}
       </Badge>
       {(status === "ACTIVE" || status === "PAUSED") && (
         <button
@@ -291,15 +419,19 @@ function StatusCell({
 
 /** Barra que aparece al seleccionar: acciones masivas a mano. */
 function SelectionBar({
-  count, noun, busy, onDuplicate, onStatus, onClear,
+  count, hidden = 0, noun, busy, onDuplicate, onStatus, onClear,
 }: {
-  count: number; noun: string; busy: boolean;
+  count: number; hidden?: number; noun: string; busy: boolean;
   onDuplicate?: () => void; onStatus: (s: EntityStatus) => void; onClear: () => void;
 }) {
   if (count === 0) return null;
+  const activate = () => {
+    // Activar empieza a gastar presupuesto: una tanda no debe salir de un clic suelto.
+    if (confirm(`¿Activar ${count} ${noun}${count > 1 ? "s" : ""}? Empezarán a gastar presupuesto.`)) onStatus("ACTIVE");
+  };
   return (
     <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 mb-2 flex-wrap">
-      <span className="text-xs font-medium">{count} {noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}</span>
+      <span className="text-xs font-medium">{count} {noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-amber-700"> · {hidden} fuera del filtro actual</span> : null}</span>
       <div className="flex items-center gap-1.5 ml-auto flex-wrap">
         {onDuplicate && (
           <Button size="sm" className="h-7 text-xs" onClick={onDuplicate} disabled={busy}>
@@ -309,7 +441,7 @@ function SelectionBar({
         <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={() => onStatus("PAUSED")} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Pause className="h-3.5 w-3.5 mr-1" />} Pausar
         </Button>
-        <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={() => onStatus("ACTIVE")} disabled={busy}>
+        <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={activate} disabled={busy}>
           <Play className="h-3.5 w-3.5 mr-1" /> Activar
         </Button>
         <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onClear} disabled={busy}>
@@ -447,14 +579,23 @@ function reportBulk(r: { ok: string[]; failed: number; firstError: unknown }, st
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
+// Cambiar de cuenta empieza de cero: sin nivel, selección ni datos de la anterior.
+function ManagerByAccount() {
+  const accountId = useSearchParams().get("accountId");
+  return <ManagerInner key={accountId ?? "todas"} />;
+}
+
 function ManagerInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const accountId = searchParams.get("accountId");
   const bmId = searchParams.get("bmId") ?? undefined;
 
-  const [accountName, setAccountName] = useState<string>("");
-  const [currency, setCurrency] = useState<string>("USD");
+  const [accountList, setAccountList] = useState<Array<{ id: string; name: string; bmId: string; currency?: string }>>([]);
+  const accountName = accountList.find(a => a.id === `act_${accountId}` || a.id === accountId)?.name ?? "";
+  const currency = accountList.find(a => a.id === `act_${accountId}` || a.id === accountId)?.currency ?? "USD";
+  const columnState = useColumns();
+  const { columns } = columnState;
 
   const [level, setLevel] = useState<Level>("campaign");
   const [selCampaign, setSelCampaign] = useState<Selection | null>(null);
@@ -466,7 +607,7 @@ function ManagerInner() {
   const [ads, setAds] = useState<Ad[]>([]);
 
   const [insightsMap, setInsightsMap] = useState<Record<string, Insights>>({});
-  const [datePreset, setDatePreset] = useState("last_7d");
+  const [datePreset, setDatePreset] = useState("today");
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
 
   const [loadingData, setLoadingData] = useState(false);
@@ -615,12 +756,9 @@ function ManagerInner() {
   // Nombre y moneda de la cuenta actual. Usa el listado cacheado.
   useEffect(() => {
     if (!accountId) return;
-    fetch(`/api/meta/accounts${bmId ? `?bmId=${bmId}` : ""}`)
+    fetch("/api/meta/accounts")
       .then(r => r.json())
-      .then(j => {
-        const acc = (j.accounts ?? []).find((a: { id: string; name: string }) => a.id === `act_${accountId}` || a.id === accountId);
-        if (acc) { setAccountName(acc.name); if (acc.currency) setCurrency(acc.currency); }
-      })
+      .then(j => setAccountList(j.accounts ?? []))
       .catch(() => { });
   }, [accountId, bmId]);
 
@@ -841,6 +979,7 @@ function ManagerInner() {
 
   const sh = (key: string, label: string, w: string) => (
     <TableHead
+      key={key}
       className={`py-2 text-[10px] font-semibold text-right ${w} cursor-pointer select-none hover:text-foreground ${sort?.key === key ? "text-primary" : ""}`}
       onClick={() => toggleSort(key)}
     >
@@ -849,23 +988,12 @@ function ManagerInner() {
       </span>
     </TableHead>
   );
-  const metricHeaders = (
-    <>
-      {sh("sales", "SALES", "w-12")}
-      {sh("spend", "SPEND", "w-20")}
-      {sh("revenue", "REVENUE", "w-20")}
-      {sh("profit", "PROFIT", "w-20")}
-      {sh("cpa", "CPA", "w-20")}
-      {sh("roi", "ROI", "w-14")}
-      {sh("cpm", "CPM", "w-20")}
-      {sh("cpc", "CPC", "w-20")}
-      {sh("ctr", "CTR", "w-14")}
-      {sh("uctr", "U-CTR", "w-14")}
-      {sh("ic", "IC", "w-16")}
-      {sh("costPerIc", "$/IC", "w-20")}
-    </>
-  );
-  const COLS = 18; // casilla + nombre + 12 métricas + estado + presupuesto/creative + acciones
+  const metricHeaders = <>{columns.map(c => sh(c.key, c.label, c.w))}</>;
+  const COLS = columns.length + 5; // casilla + nombre + métricas + estado + presupuesto/creative + acciones
+
+  // Total de lo que se ve ahora en la tabla, en la moneda de la cuenta.
+  const visRows = level === "campaign" ? visCampaigns : level === "adset" ? visAdsets : visAds;
+  const totals = sumMetrics(visRows.map(r => ({ ins: insightsMap[r.id], factor: 1 })));
 
   /** Botones visibles por fila. */
   const rowActions = (lvl: Level, id: string, extra?: React.ReactNode) => (
@@ -893,7 +1021,20 @@ function ManagerInner() {
       {/* Cuenta actual */}
       <div className="flex items-center gap-2 pb-2 text-sm">
         <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-        <span className="font-semibold truncate">{accountName || "Cuenta"}</span>
+        <Select
+          value={`act_${accountId}`}
+          onValueChange={v => {
+            const a = accountList.find(x => x.id === v);
+            if (a) router.push(`/meta/campaigns?accountId=${a.id.replace("act_", "")}&bmId=${a.bmId}`);
+          }}
+        >
+          <SelectTrigger className="h-7 min-w-44 max-w-72 text-sm font-semibold bg-white" aria-label="Cambiar de cuenta">
+            <SelectValue>{accountName || "Cuenta"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {accountList.map(a => <SelectItem key={a.id} value={a.id} className="text-xs">{a.name}{a.currency && a.currency !== "USD" ? ` · ${a.currency}` : ""}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <span className="text-muted-foreground text-xs">· {accountId}{currency !== "USD" ? ` · ${currency}` : ""}</span>
         <button className="ml-2 text-xs text-primary hover:underline" onClick={() => router.push("/meta/campaigns")}>
           Todas las cuentas
@@ -910,7 +1051,7 @@ function ManagerInner() {
           <TrendingUp className={`h-3.5 w-3.5 ${loadingInsights ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
           <Select value={datePreset} onValueChange={v => v && setDatePreset(v)}>
             <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none">
-              <SelectValue />
+              <SelectValue>{labelOf(DATE_PRESETS, datePreset)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               {DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}
@@ -932,7 +1073,7 @@ function ManagerInner() {
 
         <Select value={statusFilter} onValueChange={v => v && setStatusFilter(v)}>
           <SelectTrigger className="h-8 w-32 text-xs bg-white">
-            <SelectValue />
+            <SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {STATUS_OPTS.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}
@@ -940,22 +1081,24 @@ function ManagerInner() {
         </Select>
 
         <span className="text-xs text-muted-foreground">
-          {!loadingData && visIds.length} elementos
+          {!loadingData && !error ? `${visIds.length} elementos` : null}
         </span>
 
         <Button
           variant="outline" size="sm" className="h-8 text-xs ml-1"
-          onClick={() => router.push("/meta/jobs")}
+          onClick={openJobsDock}
         >
           <Briefcase className="h-3.5 w-3.5 mr-1" /> Trabajos
         </Button>
+        <div className="ml-auto"><ColumnPicker state={columnState} /></div>
       </div>
 
-      <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={() => router.push("/meta/jobs")} />
+      <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={openJobsDock} />
 
       {/* Barra de acciones de la selección */}
       <SelectionBar
         count={sel.size}
+        hidden={[...sel].filter(id => !visIds.includes(id)).length}
         noun={level === "campaign" ? "campaña" : level === "adset" ? "ad set" : "anuncio"}
         busy={bulkBusy}
         onDuplicate={
@@ -985,16 +1128,16 @@ function ManagerInner() {
         <div className="space-y-1.5 pt-1">
           {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded" />)}
         </div>
-      ) : (
+      ) : error && visIds.length === 0 ? null : (
         <div className="rounded-lg border bg-white shadow-sm overflow-x-auto">
           <Table className="w-full min-w-[1280px]">
             <TableHeader>
               <TableRow className="bg-muted/40 hover:bg-muted/40 border-b">
-                <TableHead className="py-2 w-8">
+                <TableHead className={`py-2 ${STICKY_CHECK}`}>
                   <Checkbox checked={allSel} indeterminate={someSel} onToggle={toggleAll} label="Seleccionar todo" />
                 </TableHead>
                 <TableHead
-                  className={`py-2 text-[10px] font-semibold min-w-[240px] cursor-pointer select-none hover:text-foreground ${sort?.key === "name" ? "text-primary" : ""}`}
+                  className={`py-2 text-[10px] font-semibold cursor-pointer select-none hover:text-foreground ${STICKY_NAME} ${sort?.key === "name" ? "text-primary" : ""}`}
                   onClick={() => toggleSort("name")}
                 >
                   NOMBRE{sort?.key === "name" ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
@@ -1003,10 +1146,22 @@ function ManagerInner() {
                 <TableHead className="py-2 text-[10px] font-semibold w-28">STATUS</TableHead>
                 {level !== "ad" && <TableHead className="py-2 text-[10px] font-semibold w-20">PRESUP.</TableHead>}
                 {level === "ad" && <TableHead className="py-2 text-[10px] font-semibold w-20">CREATIVE</TableHead>}
-                <TableHead className="py-2 text-[10px] font-semibold w-28 text-right">ACCIONES</TableHead>
+                <TableHead className={`py-2 text-[10px] font-semibold w-36 min-w-36 text-right ${STICKY_ACTIONS}`}>ACCIONES</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
+              {visRows.length > 0 && (
+                <TableRow className="group bg-muted hover:bg-muted font-semibold">
+                  <TableCell className={`py-2 ${STICKY_CHECK} bg-muted`} />
+                  <TableCell className={`py-2 text-xs ${STICKY_NAME} bg-muted`}>
+                    Total · {visRows.length} {level === "campaign" ? "campañas" : level === "adset" ? "ad sets" : "anuncios"}
+                  </TableCell>
+                  <MetricCells metrics={totals} loading={loadingInsights} columns={columns} currency={currency} />
+                  <TableCell className="py-2" />
+                  <TableCell className="py-2" />
+                  <TableCell className={`py-2 ${STICKY_ACTIONS} bg-muted`} />
+                </TableRow>
+              )}
 
               {/* ── CAMPAÑAS */}
               {level === "campaign" && (
@@ -1019,14 +1174,14 @@ function ManagerInner() {
                 ) : visCampaigns.map(c => {
                   const ins = insightsMap[c.id];
                   return (
-                    <TableRow key={c.id} className={`group cursor-pointer ${rowColorClass(ins, !loadingInsights)}`} onClick={() => drillAdsets(c)}>
-                      <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                    <TableRow key={c.id} className="group cursor-pointer hover:bg-muted" onClick={() => drillAdsets(c)}>
+                      <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedCampaignIds.has(c.id)} onToggle={() => toggleOne(c.id)} label={`Seleccionar ${c.name}`} />
                       </TableCell>
-                      <TableCell className="py-2 min-w-[240px]">
+                      <TableCell className={`py-2 ${STICKY_NAME}`}>
                         <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={c.name}>{c.name}</p>
                       </TableCell>
-                      <MetricCells ins={ins} loading={loadingInsights} />
+                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2" onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={c.id} status={c.status} entityType="campaign"
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
@@ -1034,7 +1189,7 @@ function ManagerInner() {
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
                         {fmtBudget(c.daily_budget ?? c.lifetime_budget, currency)}
                       </TableCell>
-                      <TableCell className="py-2">
+                      <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("campaign", c.id, (
                           <>
                             <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar campaña"
@@ -1063,14 +1218,14 @@ function ManagerInner() {
                 ) : visAdsets.map(a => {
                   const ins = insightsMap[a.id];
                   return (
-                    <TableRow key={a.id} className={`group cursor-pointer ${rowColorClass(ins, !loadingInsights)}`} onClick={() => drillAds(a)}>
-                      <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                    <TableRow key={a.id} className="group cursor-pointer hover:bg-muted" onClick={() => drillAds(a)}>
+                      <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedAdsetIds.has(a.id)} onToggle={() => toggleOne(a.id)} label={`Seleccionar ${a.name}`} />
                       </TableCell>
-                      <TableCell className="py-2 min-w-[240px]">
+                      <TableCell className={`py-2 ${STICKY_NAME}`}>
                         <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
                       </TableCell>
-                      <MetricCells ins={ins} loading={loadingInsights} />
+                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2" onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={a.id} status={a.status} entityType="adset"
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
@@ -1078,7 +1233,7 @@ function ManagerInner() {
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
                         {fmtBudget(a.daily_budget ?? a.lifetime_budget, currency)}
                       </TableCell>
-                      <TableCell className="py-2">
+                      <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("adset", a.id, (
                           <>
                             <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar ad set"
@@ -1107,14 +1262,14 @@ function ManagerInner() {
                 ) : visAds.map(ad => {
                   const ins = insightsMap[ad.id];
                   return (
-                    <TableRow key={ad.id} className={rowColorClass(ins, !loadingInsights)}>
-                      <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                    <TableRow key={ad.id} className="group hover:bg-muted">
+                      <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedAdIds.has(ad.id)} onToggle={() => toggleOne(ad.id)} label={`Seleccionar ${ad.name}`} />
                       </TableCell>
-                      <TableCell className="py-2 min-w-[240px]">
+                      <TableCell className={`py-2 ${STICKY_NAME}`}>
                         <p className="font-medium text-xs leading-tight truncate" title={ad.name}>{ad.name}</p>
                       </TableCell>
-                      <MetricCells ins={ins} loading={loadingInsights} />
+                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2" onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={ad.id} status={ad.status} entityType="ad"
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
@@ -1122,7 +1277,7 @@ function ManagerInner() {
                       <TableCell className="py-2 text-[10px] text-muted-foreground font-mono truncate max-w-[80px]">
                         {ad.creative_id ?? "—"}
                       </TableCell>
-                      <TableCell className="py-2">
+                      <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("ad", ad.id, ad.creative_id ? (
                           <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar anuncio"
                             onClick={() => { setSelectedAdIds(new Set([ad.id])); setShowDuplicateAdsModal(true); }}>
@@ -1198,7 +1353,7 @@ function GlobalCampaignsView() {
   const [done, setDone] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [datePreset, setDatePreset] = useState("last_7d");
+  const [datePreset, setDatePreset] = useState("today");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ACTIVE");
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>({ key: "spend", dir: "desc" });
@@ -1209,6 +1364,9 @@ function GlobalCampaignsView() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [dupTargets, setDupTargets] = useState<GRow[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const columnState = useColumns();
+  const { columns } = columnState;
+  const { fx, toUsd } = useFx();
   // Invalida corridas viejas (StrictMode monta el efecto 2× en dev y dispararía cargas duplicadas).
   const runId = useRef(0);
 
@@ -1290,13 +1448,22 @@ function GlobalCampaignsView() {
       if (sort.key === "account") return r.accName.toLowerCase();
       const m = calcMetrics(insMap[r.camp.id]) as Record<string, number | null> | null;
       const v = m ? m[sort.key] : null;
-      return v == null ? -Infinity : v;
+      if (v == null) return -Infinity;
+      // Dinero en USD para comparar entre monedas. Sin tasa: al fondo, nunca mezclado.
+      if (!MONEY_KEYS.has(sort.key)) return v;
+      const f = toUsd(r.currency);
+      return f == null ? -Infinity : v * f;
     };
     vis = [...vis].sort((a, b) => {
       const va = val(a), vb = val(b);
       return typeof va === "string" && typeof vb === "string" ? va.localeCompare(vb) * dir : ((va as number) - (vb as number)) * dir;
     });
   }
+
+  // Totales en USD. Las monedas sin tasa no se suman y se avisa.
+  const noRate = [...new Set(vis.filter(r => toUsd(r.currency) == null).map(r => r.currency ?? "?"))];
+  const totals = sumMetrics(vis.filter(r => toUsd(r.currency) != null).map(r => ({ ins: insMap[r.camp.id], factor: toUsd(r.currency) ?? 1 })));
+  const otherCurrencies = [...new Set(vis.map(r => r.currency ?? "USD"))].filter(c => c !== "USD");
 
   const keyOf = (r: GRow) => `${r.accId}:${r.camp.id}`;
   const visKeys = vis.map(keyOf);
@@ -1319,7 +1486,7 @@ function GlobalCampaignsView() {
 
   const arrow = (key: string) => sort?.key === key ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
   const sh = (key: string, label: string, w: string) => (
-    <TableHead className={`py-2 text-[10px] font-semibold text-right ${w} cursor-pointer select-none hover:text-foreground ${sort?.key === key ? "text-primary" : ""}`} onClick={() => toggleSort(key)}>
+    <TableHead key={key} className={`py-2 text-[10px] font-semibold text-right ${w} cursor-pointer select-none hover:text-foreground ${sort?.key === key ? "text-primary" : ""}`} onClick={() => toggleSort(key)}>
       <span className="inline-flex items-center justify-end gap-0.5">{label}{arrow(key)}</span>
     </TableHead>
   );
@@ -1338,7 +1505,7 @@ function GlobalCampaignsView() {
         <div className="ml-auto flex items-center gap-2">
           <TrendingUp className={`h-3.5 w-3.5 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
           <Select value={datePreset} onValueChange={v => v && setDatePreset(v)}>
-            <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none"><SelectValue>{labelOf(DATE_PRESETS, datePreset)}</SelectValue></SelectTrigger>
             <SelectContent>{DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
           </Select>
           <FreshnessBar
@@ -1354,7 +1521,7 @@ function GlobalCampaignsView() {
           <Input placeholder="Buscar campaña o cuenta..." className="pl-8 h-8 text-sm w-56 bg-white" value={query} onChange={e => setQuery(e.target.value)} />
         </div>
         <Select value={statusFilter} onValueChange={v => v && setStatusFilter(v)}>
-          <SelectTrigger className="h-8 w-32 text-xs bg-white"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-8 w-32 text-xs bg-white"><SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue></SelectTrigger>
           <SelectContent>{STATUS_OPTS.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}</SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground ml-1">
@@ -1365,9 +1532,10 @@ function GlobalCampaignsView() {
             <AlertTriangle className="h-3.5 w-3.5" /> {problems.length} aviso{problems.length > 1 ? "s" : ""} de cuentas
           </button>
         )}
-        <Button variant="outline" size="sm" className="h-8 text-xs ml-auto" onClick={() => router.push("/meta/jobs")}>
+        <Button variant="outline" size="sm" className="h-8 text-xs ml-auto" onClick={openJobsDock}>
           <Briefcase className="h-3.5 w-3.5 mr-1" /> Trabajos
         </Button>
+        <ColumnPicker state={columnState} />
       </div>
 
       {showProblems && problems.length > 0 && (
@@ -1381,10 +1549,16 @@ function GlobalCampaignsView() {
         </div>
       )}
 
-      <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={() => router.push("/meta/jobs")} />
+      <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={openJobsDock} />
+
+      {noRate.length > 0 && !loading && (
+        <p className="mb-2 text-xs text-amber-700">
+          Sin tasa de cambio para {noRate.join(", ")}: esas cuentas no se suman al total y van al final al ordenar por dinero.
+        </p>
+      )}
 
       <SelectionBar
-        count={selected.size} noun="campaña" busy={bulkBusy}
+        count={selected.size} hidden={[...selected].filter(k => !visKeys.includes(k)).length} noun="campaña" busy={bulkBusy}
         onDuplicate={() => setDupTargets(selRows)}
         onStatus={bulk}
         onClear={() => setSelected(new Set())}
@@ -1394,47 +1568,50 @@ function GlobalCampaignsView() {
         <Table className="w-full min-w-[1300px]">
           <TableHeader>
             <TableRow className="border-b">
-              <TableHead className="py-2 w-8">
+              <TableHead className={`py-2 ${STICKY_CHECK}`}>
                 <Checkbox checked={allSel} indeterminate={someSel} label="Seleccionar todo"
                   onToggle={() => setSelected(allSel ? new Set() : new Set(visKeys))} />
               </TableHead>
-              <TableHead className={`py-2 text-[10px] font-semibold min-w-[220px] cursor-pointer select-none hover:text-foreground ${sort?.key === "name" ? "text-primary" : ""}`} onClick={() => toggleSort("name")}>NOMBRE{arrow("name")}</TableHead>
+              <TableHead className={`py-2 text-[10px] font-semibold cursor-pointer select-none hover:text-foreground ${STICKY_NAME} ${sort?.key === "name" ? "text-primary" : ""}`} onClick={() => toggleSort("name")}>NOMBRE{arrow("name")}</TableHead>
               <TableHead className={`py-2 text-[10px] font-semibold min-w-[140px] cursor-pointer select-none hover:text-foreground ${sort?.key === "account" ? "text-primary" : ""}`} onClick={() => toggleSort("account")}>CUENTA{arrow("account")}</TableHead>
-              {sh("sales", "SALES", "w-12")}{sh("spend", "SPEND", "w-20")}{sh("revenue", "REVENUE", "w-20")}{sh("profit", "PROFIT", "w-20")}{sh("cpa", "CPA", "w-20")}{sh("roi", "ROI", "w-14")}{sh("cpm", "CPM", "w-20")}{sh("cpc", "CPC", "w-20")}{sh("ctr", "CTR", "w-14")}{sh("uctr", "U-CTR", "w-14")}{sh("ic", "IC", "w-16")}{sh("costPerIc", "$/IC", "w-20")}
+              {columns.map(c => sh(c.key, c.label, c.w))}
               <TableHead className="py-2 text-[10px] font-semibold w-20">STATUS</TableHead>
-              <TableHead className="py-2 text-[10px] font-semibold w-28 text-right">ACCIONES</TableHead>
+              <TableHead className={`py-2 text-[10px] font-semibold w-36 min-w-36 text-right ${STICKY_ACTIONS}`}>ACCIONES</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
+            {vis.length > 0 && (
+              <TableRow className="group bg-muted hover:bg-muted font-semibold">
+                <TableCell className={`py-2 ${STICKY_CHECK} bg-muted`} />
+                <TableCell className={`py-2 text-xs ${STICKY_NAME} bg-muted`}>
+                  Total · {vis.length} campañas
+                </TableCell>
+                <TableCell className="py-2 text-[11px] font-normal text-muted-foreground"
+                  title={otherCurrencies.map(c => `1 USD = ${(fx?.rates[c] ?? 0).toLocaleString("es-CO", { maximumFractionDigits: 0 })} ${c}`).join(" · ")}>
+                  {otherCurrencies.length > 0 ? "en USD aprox." : "USD"}
+                </TableCell>
+                <MetricCells metrics={totals} loading={false} columns={columns} currency="USD" />
+                <TableCell className="py-2" />
+                <TableCell className={`py-2 ${STICKY_ACTIONS} bg-muted`} />
+              </TableRow>
+            )}
             {vis.length === 0 ? (
-              <TableRow><TableCell colSpan={18} className="text-center py-16 text-muted-foreground text-sm">{loading ? "Cargando…" : "Sin campañas"}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={columns.length + 5} className="text-center py-16 text-muted-foreground text-sm">{loading ? "Cargando…" : "Sin campañas"}</TableCell></TableRow>
             ) : vis.map(r => {
               const ins = insMap[r.camp.id];
-              const m = calcMetrics(ins);
               const k = keyOf(r);
               return (
-                <TableRow key={k} className={`group cursor-pointer ${rowColorClass(ins, true)}`} onClick={() => router.push(`/meta/campaigns?accountId=${r.accId}&bmId=${r.bmId}`)}>
-                  <TableCell className="py-2 w-8" onClick={e => e.stopPropagation()}>
+                <TableRow key={k} className="group cursor-pointer hover:bg-muted" onClick={() => router.push(`/meta/campaigns?accountId=${r.accId}&bmId=${r.bmId}`)}>
+                  <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, true)}`} onClick={e => e.stopPropagation()}>
                     <Checkbox checked={selected.has(k)} onToggle={() => toggleOne(k)} label={`Seleccionar ${r.camp.name}`} />
                   </TableCell>
-                  <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1 group-hover:text-primary" title={r.camp.name}>{r.camp.name}</span></TableCell>
+                  <TableCell className={`py-2 ${STICKY_NAME}`}><span className="block truncate text-xs font-medium group-hover:text-primary" title={r.camp.name}>{r.camp.name}</span></TableCell>
                   <TableCell className="py-2"><span className="text-[11px] text-muted-foreground line-clamp-1">{r.accName}</span></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtI(m?.sales ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.spend ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.revenue ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><ProfitCell v={m?.profit ?? 0} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpa ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><RoiCell v={m?.roi ?? 0} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpm ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.cpc ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtP(m?.ctr ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtP(m?.uctr ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtI(m?.ic ?? 0)} loading={false} /></TableCell>
-                  <TableCell className="py-2 text-right"><MC v={fmtC(m?.costPerIc ?? 0)} loading={false} /></TableCell>
+                  <MetricCells metrics={calcMetrics(ins)} loading={false} columns={columns} currency={r.currency ?? "USD"} />
                   <TableCell className="py-2">
-                    <Badge variant={r.camp.status === "ACTIVE" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">{r.camp.status}</Badge>
+                    <Badge variant={r.camp.status === "ACTIVE" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">{ENTITY_STATUS[r.camp.status] ?? r.camp.status}</Badge>
                   </TableCell>
-                  <TableCell className="py-2">
+                  <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                     <div className="flex items-center justify-end gap-0.5" onClick={e => e.stopPropagation()}>
                       <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar campaña" onClick={() => setDupTargets([r])}>
                         <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
@@ -1479,7 +1656,7 @@ export default function CampaignsView() {
         {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded" />)}
       </div>
     }>
-      <ManagerInner />
+      <ManagerByAccount />
     </Suspense>
   );
 }

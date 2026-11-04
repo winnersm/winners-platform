@@ -170,14 +170,8 @@ export default function DashboardView() {
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [done, setDone] = useState(0);
-  const [datePreset, setDatePresetRaw] = useState(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("dashboard_datePreset") ?? "last_7d";
-    return "last_7d";
-  });
-  const setDatePreset = useCallback((v: string) => {
-    setDatePresetRaw(v);
-    localStorage.setItem("dashboard_datePreset", v);
-  }, []);
+  // Siempre empieza en «Hoy»: el periodo elegido no se recuerda entre visitas.
+  const [datePreset, setDatePreset] = useState("today");
   const [customFrom, setCustomFrom] = useState(() => {
     if (typeof window !== "undefined") return localStorage.getItem("dashboard_customFrom") ?? "";
     return "";
@@ -368,7 +362,7 @@ export default function DashboardView() {
             {datePreset.startsWith("custom:") ? (
               <div className="flex items-center h-8 rounded-md border bg-white overflow-hidden text-xs">
                 <span className="px-2.5 text-muted-foreground">{customFrom} — {customTo}</span>
-                <button className="px-2 h-full border-l text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" onClick={() => setDatePreset("last_7d")} title="Volver a presets">
+                <button className="px-2 h-full border-l text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" onClick={() => setDatePreset("today")} title="Volver a presets">
                   <X className="h-3 w-3" />
                 </button>
               </div>
