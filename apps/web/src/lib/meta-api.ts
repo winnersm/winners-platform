@@ -1,6 +1,7 @@
 import { prisma } from "@winners/db";
 import { decrypt } from "@/lib/crypto";
 import { redis } from "@/lib/redis";
+import { splitExistingAds } from "@/lib/ad-dedup";
 import { MetaApiError, isRateLimitKind, serializeError, type MetaErrorDetail, type SerializedError } from "@/lib/meta-errors";
 
 export { MetaApiError } from "@/lib/meta-errors";
@@ -445,7 +446,7 @@ async function createAdBracket(
 // Espera antes del GET de verificación tras el 1er fallo de propagación (usado por createAdBracket).
 const AD_VERIFY_DELAY_MS = 30000;
 
-interface AdToCreate { newId: string; name: string; creativeId: string }
+interface AdToCreate { newId: string; name: string; creativeId: string; status: "ACTIVE" | "PAUSED" }
 
 // ¿El error de crear ad es transitorio (reintenta) o real (se descarta)?
 function isTransientAdError(code: number | undefined, subcode: number | undefined, httpCode: number): boolean {
@@ -505,6 +506,9 @@ async function createAdsBatched(
   let pending = [...items];
   let wait = AD_WAIT_BASE; // espera adaptativa entre rondas
   const lastError = new Map<AdToCreate, MetaApiError>();
+  // Creados en esta ejecución, por ad set y nombre (los nombres pueden repetirse).
+  const counted = new Map<string, number>();
+  const countKey = (adsetId: string, name: string) => `${adsetId}\u0000${name}`;
 
   for (let round = 0; round < AD_MAX_ATTEMPTS && pending.length > 0; round++) {
     if (checkCancelled) await checkCancelled();
@@ -520,26 +524,32 @@ async function createAdsBatched(
 
       // Dedup por batch GET: cuáles pendientes YA tienen el ad (falso positivo) → no recrear.
       const stillPending: AdToCreate[] = [];
-      for (const group of chunk(pending, AD_BATCH_SIZE)) {
+      for (const adsetIds of chunk([...new Set(pending.map((it) => it.newId))], AD_BATCH_SIZE)) {
+        const itemsOf = (id: string) => pending.filter((it) => it.newId === id);
         let results: BatchRes[];
         try {
-          results = await metaBatch(token, group.map((it) => ({
-            method: "GET" as const, relative_url: `${it.newId}/ads?fields=name&limit=10`,
+          results = await metaBatch(token, adsetIds.map((id) => ({
+            method: "GET" as const, relative_url: `${id}/ads?fields=name&limit=200`,
           })));
         } catch {
-          stillPending.push(...group); // batch GET falló entero (probable 17) → reintentar todos
+          for (const id of adsetIds) stillPending.push(...itemsOf(id)); // batch GET falló entero (probable 17) → reintentar todos
           sawRateLimit = true;
           continue;
         }
         results.forEach((r, i) => {
-          const it = group[i];
+          const adsetId = adsetIds[i];
+          if (r.code !== 200) { stillPending.push(...itemsOf(adsetId)); return; }
           const body = r.body as { data?: Array<{ name: string }> } | null;
-          if (r.code === 200 && (body?.data ?? []).some((a) => a.name === it.name)) {
+          const { found, missing } = splitExistingAds(
+            itemsOf(adsetId), (body?.data ?? []).map((a) => a.name),
+            (name) => counted.get(countKey(adsetId, name)) ?? 0,
+          );
+          for (const it of found) {
             adsOk++;
-            console.log(`[ads-batch] ✅ ya existía (falso positivo) | adset=${it.newId}`);
-          } else {
-            stillPending.push(it);
+            counted.set(countKey(adsetId, it.name), (counted.get(countKey(adsetId, it.name)) ?? 0) + 1);
+            console.log(`[ads-batch] ✅ ya existía | adset=${adsetId}`);
           }
+          stillPending.push(...missing);
         });
       }
       pending = stillPending;
@@ -554,7 +564,7 @@ async function createAdsBatched(
         f.set("name", it.name);
         f.set("adset_id", it.newId);
         f.set("creative[creative_id]", it.creativeId);
-        f.set("status", "ACTIVE");
+        f.set("status", it.status); // el mismo estado que el anuncio original
         return { method: "POST" as const, relative_url: `act_${accountId}/ads`, body: f.toString() };
       }));
       results.forEach((r, i) => {
@@ -562,6 +572,7 @@ async function createAdsBatched(
         const body = r.body as { id?: string; error?: MetaAdError } | null;
         if (r.code === 200 && body?.id) {
           adsOk++;
+          counted.set(countKey(it.newId, it.name), (counted.get(countKey(it.newId, it.name)) ?? 0) + 1);
         } else if (isTransientAdError(body?.error?.code, body?.error?.error_subcode, r.code)) {
           if (body?.error?.code === 17) sawRateLimit = true;
           lastError.set(it, batchError(r, `POST act_${accountId}/ads`));
@@ -1005,12 +1016,20 @@ export async function invalidateCampaignsCache(accountId: string) {
 // config del adset original, se LIMPIA (buildAdsetPayload, evita error 100) y se crea uno
 // nuevo con POST /adsets: instantáneo, sin IN_PROCESS, sin espera. El ad reusa el creative_id
 // original de cada adset (no se recrea el creative).
+// Se copian todos los anuncios del ad set, reutilizando su creativo: el ad_id es
+// nuevo, pero creative_id y publicación son los del original (conserva la prueba social).
+const ADS_PER_ADSET_MAX = 100;
 const ADSET_GET_FIELDS = "name,status,daily_budget,lifetime_budget,bid_amount,bid_strategy," +
   "bid_constraints,billing_event,optimization_goal,targeting,promoted_object,pacing_type," +
-  "destination_type,attribution_spec,start_time,end_time,ads.limit(1){name,creative{id}}";
+  "destination_type,attribution_spec,start_time,end_time,ads.limit(" + ADS_PER_ADSET_MAX + "){name,status,creative{id}}";
 const ADSET_SKIP = new Set(["id", "account_id", "created_time", "updated_time", "campaign_id", "name", "effective_status", "ads"]);
 
-interface AdsetSpec { origId: string; adsetName: string; payload: Record<string, string>; adName: string; creativeId: string }
+interface AdsetSpecAd { name: string; creativeId: string; status: "ACTIVE" | "PAUSED" }
+interface AdsetSpec { origId: string; adsetName: string; payload: Record<string, string>; ads: AdsetSpecAd[] }
+interface ReadyAdset { newId: string; ads: AdsetSpecAd[] }
+
+const toAdItems = (adsets: ReadyAdset[]): AdToCreate[] =>
+  adsets.flatMap((a) => a.ads.map((ad) => ({ newId: a.newId, ...ad })));
 
 function buildAdsetPayload(raw: Record<string, unknown>): Record<string, string> {
   const a: Record<string, unknown> = { ...raw };
@@ -1035,7 +1054,7 @@ function buildAdsetPayload(raw: Record<string, unknown>): Record<string, string>
 }
 
 // Lee la config completa de cada adset (batch GET) + su creative, lista para recrear.
-async function fetchAdsetSpecs(adsetIds: string[], token: string): Promise<AdsetSpec[]> {
+async function fetchAdsetSpecs(adsetIds: string[], token: string, issues: DuplicateIssue[] = []): Promise<AdsetSpec[]> {
   const out: AdsetSpec[] = [];
   for (const group of chunk(adsetIds, BATCH_MAX)) {
     const results = await metaBatch(token, group.map((id) => ({
@@ -1048,10 +1067,22 @@ async function fetchAdsetSpecs(adsetIds: string[], token: string): Promise<Adset
         console.error(`[fromscratch] No se pudo leer adset ${id}: ${JSON.stringify((a as { error?: unknown })?.error)}`);
         return;
       }
-      const ads = (a.ads as { data?: Array<{ name: string; creative?: { id: string } }> } | undefined)?.data ?? [];
-      const ad = ads.find((x) => x.creative?.id);
-      if (!ad) { console.error(`[fromscratch] Adset ${id} sin ad/creative`); return; }
-      out.push({ origId: id, adsetName: String(a.name ?? "Adset"), payload: buildAdsetPayload(a), adName: ad.name, creativeId: ad.creative!.id });
+      const edge = a.ads as {
+        data?: Array<{ name: string; status?: string; creative?: { id: string } }>; paging?: { next?: string };
+      } | undefined;
+      // Solo lo vigente: archivados y borrados no se copian.
+      const live = (edge?.data ?? []).filter((x) => x.status === "ACTIVE" || x.status === "PAUSED");
+      const ads = live.flatMap((x) => (x.creative?.id
+        ? [{ name: x.name, creativeId: x.creative.id, status: x.status as AdsetSpecAd["status"] }]
+        : []));
+      if (ads.length === 0) { console.error(`[fromscratch] Adset ${id} sin ad/creative`); return; }
+      if (edge?.paging?.next) {
+        issues.push({
+          step: "ad", name: String(a.name ?? "Adset"), sourceId: id,
+          error: serializeError(new Error(`Este ad set tiene más de ${ADS_PER_ADSET_MAX} anuncios: solo se copiaron los primeros ${ADS_PER_ADSET_MAX}`)),
+        });
+      }
+      out.push({ origId: id, adsetName: String(a.name ?? "Adset"), payload: buildAdsetPayload(a), ads });
     });
   }
   return out;
@@ -1067,8 +1098,8 @@ async function createAdsetsFromScratch(
   accountId: string, token: string, campaignId: string,
   specs: { spec: AdsetSpec; name: string }[],
   issues: DuplicateIssue[] = [],
-): Promise<{ newId: string; adName: string; creativeId: string }[]> {
-  const created: { newId: string; adName: string; creativeId: string }[] = [];
+): Promise<ReadyAdset[]> {
+  const created: ReadyAdset[] = [];
   let pending = [...specs];
   const lastError = new Map<{ spec: AdsetSpec; name: string }, MetaApiError>();
 
@@ -1095,7 +1126,7 @@ async function createAdsetsFromScratch(
         const item = group[i];
         const body = r.body as { id?: string } | null;
         if (r.code === 200 && body?.id) {
-          created.push({ newId: body.id, adName: item.spec.adName, creativeId: item.spec.creativeId });
+          created.push({ newId: body.id, ads: item.spec.ads });
           return;
         }
         const err = batchError(r, `POST act_${accountId}/adsets`);
@@ -1192,7 +1223,7 @@ export async function duplicateCampaign(
   const adsetsJson = await metaGet(`${campaignId}/adsets`, token, { fields: "id", limit: "200" }, 8);
   const origAdsetIds: string[] = (adsetsJson.data ?? []).map((a: { id: string }) => a.id);
   if (origAdsetIds.length === 0) throw new Error("La campaña original no tiene ad sets: no hay nada que copiar");
-  const specs = await fetchAdsetSpecs(origAdsetIds, token);
+  const specs = await fetchAdsetSpecs(origAdsetIds, token, issues);
   if (specs.length === 0) throw new Error("No se pudo leer la configuración de ningún ad set de la campaña original");
   if (specs.length < origAdsetIds.length) {
     issues.push({
@@ -1205,14 +1236,14 @@ export async function duplicateCampaign(
 
   // Al reanudar, los ad sets que ya existen en la copia (mismo nombre) no se recrean.
   let work = specs.map((s) => ({ spec: s, name: s.adsetName }));
-  const existing: { newId: string; adName: string; creativeId: string }[] = [];
+  const existing: ReadyAdset[] = [];
   if (resumed) {
     const cur = await metaGet(`${newCampaignId}/adsets`, token, { fields: "id,name", limit: "200" });
     const pool = [...((cur.data ?? []) as Array<{ id: string; name: string }>)];
     work = work.filter((w) => {
       const idx = pool.findIndex((a) => a.name === w.name);
       if (idx === -1) return true;
-      existing.push({ newId: pool[idx].id, adName: w.spec.adName, creativeId: w.spec.creativeId });
+      existing.push({ newId: pool[idx].id, ads: w.spec.ads });
       pool.splice(idx, 1);
       return false;
     });
@@ -1231,11 +1262,11 @@ export async function duplicateCampaign(
 
   // Fase 4: Crear ads (de a 2, reusan el creative ORIGINAL de cada adset).
   await cb(55, "Creando ads (de a 2)...");
-  const adItems: AdToCreate[] = createdAdsets.map((a) => ({ newId: a.newId, name: a.adName, creativeId: a.creativeId }));
+  const adItems = toAdItems(createdAdsets);
   const { adsOk, failed } = await createAdsBatched(accountId, token, adItems, cb, 55, 96, checkCancelled, {
     dedupFirst: resumed, issues,
   });
-  console.log(`[duplicate] FIN | ${adsetsOk} adsets, ${adsOk}/${createdAdsets.length} ads | ${failed.length} fallidos`);
+  console.log(`[duplicate] FIN | ${adsetsOk} adsets, ${adsOk}/${adItems.length} ads | ${failed.length} fallidos`);
 
   // Fase 5: activar solo si se pidió (la copia nació pausada).
   if (status === "ACTIVE") {
@@ -1248,11 +1279,11 @@ export async function duplicateCampaign(
     }
   }
 
-  const summary = `${adsetsOk}/${specs.length} adsets, ${adsOk}/${createdAdsets.length} ads`;
+  const summary = `${adsetsOk}/${specs.length} adsets, ${adsOk}/${adItems.length} ads`;
   await cb(100, issues.length ? `Completado con avisos: ${summary} (${issues.length} incidencia${issues.length > 1 ? "s" : ""})` : `Completado: ${summary}`);
   return {
     newCampaignId, adsetsCount: adsetsOk, adsCount: adsOk,
-    adsetsExpected: specs.length, adsExpected: createdAdsets.length, resumed,
+    adsetsExpected: specs.length, adsExpected: adItems.length, resumed,
     ...(issues.length ? { issues } : {}),
   };
 }
@@ -1273,7 +1304,7 @@ export async function duplicateAdsets(
   // Fase 1: Leer config completa de cada adset ORIGEN (config + creative) — FROM SCRATCH.
   if (checkCancelled) await checkCancelled();
   await cb(10, `Leyendo config de ${adsetIds.length} adset(s)...`);
-  const specs = await fetchAdsetSpecs(adsetIds, token);
+  const specs = await fetchAdsetSpecs(adsetIds, token, issues);
   if (specs.length === 0) throw new Error("No se pudo leer la config de ningún adset");
 
   // Lista de trabajo: cada adset origen × count, creado DESDE CERO (sin /copies, sin IN_PROCESS).
@@ -1294,11 +1325,11 @@ export async function duplicateAdsets(
   // Fase 3: Crear ads (de a 2, reusan el creative ORIGINAL de cada adset) — sin cambios.
   if (checkCancelled) await checkCancelled();
   await cb(55, "Creando ads (de a 2)...");
-  const adItems: AdToCreate[] = createdAdsets.map((a) => ({ newId: a.newId, name: a.adName, creativeId: a.creativeId }));
+  const adItems = toAdItems(createdAdsets);
   const { adsOk, failed } = await createAdsBatched(accountId, token, adItems, cb, 55, 99, checkCancelled, { issues });
-  console.log(`[duplicateAdsets] FIN: ${createdAdsets.length} adsets, ${adsOk}/${createdAdsets.length} ads | ${failed.length} fallidos`);
+  console.log(`[duplicateAdsets] FIN: ${createdAdsets.length} adsets, ${adsOk}/${adItems.length} ads | ${failed.length} fallidos`);
 
-  await cb(100, `Completado: ${createdAdsets.length} adsets, ${adsOk}/${total} ads`);
+  await cb(100, `Completado: ${createdAdsets.length} adsets, ${adsOk}/${adItems.length} ads`);
   return { adsetsCount: createdAdsets.length, adsCount: adsOk, ...(issues.length ? { issues } : {}) };
 }
 
