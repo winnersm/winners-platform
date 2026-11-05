@@ -16,6 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ErrorDetails, errorInfoOf, type ErrorInfo } from "@/components/error-details";
 import { DUPLICATE_LIMITS } from "@/lib/duplicate-limits";
+import { buildCopyTemplate, renderCopyName } from "@/lib/copy-name";
 
 interface Campaign {
   id: string; name: string; status: string; is_cbo: boolean;
@@ -44,8 +45,9 @@ function formatBudget(cents: string | undefined, currency = "USD") {
 export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, onClose, onSuccess }: Props) {
   const single = campaigns.length === 1 ? campaigns[0] : null;
 
-  const [name, setName] = useState(single ? `[Copia] ${single.name}` : "");
-  const [prefix, setPrefix] = useState("[Copia] ");
+  const [template, setTemplate] = useState("[Copia] {nombre}");
+  const [numbered, setNumbered] = useState(true);
+  const [startRaw, setStartRaw] = useState("1");
   const [status, setStatus] = useState<"ACTIVE" | "PAUSED">("PAUSED");
   const [countRaw, setCountRaw] = useState("1");
   const [saving, setSaving] = useState(false);
@@ -58,7 +60,18 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
     : count > MAX_COPIES ? `Máximo ${MAX_COPIES} copias por campaña`
     : total > MAX_TOTAL ? `Son ${total} copias: el máximo por tanda es ${MAX_TOTAL}. Reduce la cantidad o divide la selección.`
     : null;
-  const nameError = single && !name.trim() ? "Nombre requerido" : null;
+  const startAt = Math.floor(Number(startRaw));
+  const nameError = !template.trim() ? "Escribe el nombre de las copias"
+    : numbered && (!Number.isFinite(startAt) || startAt < 0) ? "El número inicial no es válido"
+    : null;
+
+  // Vista previa con la primera campaña: lo mismo que calculará la API.
+  const sample = buildCopyTemplate(template, campaigns[0]?.name ?? "", numbered);
+  const validCount = Number.isFinite(count) && count > 0 ? count : 1;
+  const previewNumbers = validCount > 3
+    ? [startAt, startAt + 1, null, startAt + validCount - 1]
+    : Array.from({ length: validCount }, (_, i) => startAt + i);
+  const addToken = (token: string) => setTemplate(t => `${t.trimEnd()} ${token}`);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -72,7 +85,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
         const acc = c.accountId ?? accountId;
         if (!acc) continue;
         const g = groups.get(acc) ?? { bmId: c.bmId ?? bmId, items: [] };
-        g.items.push({ campaignId: c.id, name: single ? name.trim() : `${prefix}${c.name}` });
+        g.items.push({ campaignId: c.id, name: buildCopyTemplate(template, c.name, numbered) });
         groups.set(acc, g);
       }
       const batchIds: string[] = [];
@@ -81,7 +94,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
         const res = await fetch("/api/meta/duplicate/campaign", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items: g.items, accountId: acc, bmId: g.bmId, status, count }),
+          body: JSON.stringify({ items: g.items, accountId: acc, bmId: g.bmId, status, count, startAt: numbered ? startAt : 1 }),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -137,21 +150,40 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-4 mt-2">
-          {single ? (
-            <div className="space-y-1.5">
-              <Label htmlFor="dup-name">Nombre de la copia</Label>
-              <Input id="dup-name" value={name} onChange={(e) => setName(e.target.value)} />
-              {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+          <div className="space-y-1.5">
+            <Label htmlFor="dup-name">Nombre de las copias</Label>
+            <Input id="dup-name" value={template} onChange={(e) => setTemplate(e.target.value)} />
+            <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-muted-foreground">
+              <span>Insertar:</span>
+              <button type="button" className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono hover:bg-muted" onClick={() => addToken("{nombre}")}>{"{nombre}"}</button>
+              <button type="button" className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono hover:bg-muted" onClick={() => addToken("{numero}")}>{"{numero}"}</button>
+              <span>Colócalos donde quieras dentro del nombre.</span>
             </div>
-          ) : (
-            <div className="space-y-1.5">
-              <Label htmlFor="dup-prefix">Prefijo para los nombres</Label>
-              <Input id="dup-prefix" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
-              <p className="text-[11px] text-muted-foreground truncate">
-                Ej.: «{prefix}{campaigns[0]?.name}{count > 1 ? " (1)" : ""}»
-              </p>
-            </div>
-          )}
+            {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+            <label className="flex items-center gap-2 text-sm cursor-pointer whitespace-nowrap">
+              <input type="checkbox" checked={numbered} onChange={(e) => setNumbered(e.target.checked)} className="h-3.5 w-3.5" />
+              Numerar en orden ascendente
+            </label>
+            {numbered && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
+                Empezar en
+                <Input type="number" min={0} className="h-7 w-20 text-xs" value={startRaw} onChange={(e) => setStartRaw(e.target.value)} aria-label="Número inicial" />
+              </label>
+            )}
+          </div>
+
+          <div className="rounded-md bg-muted/50 p-2 text-[11px] space-y-0.5">
+            <p className="font-medium text-muted-foreground">Así quedarán{campaigns.length > 1 ? " (primera campaña)" : ""}:</p>
+            {previewNumbers.map((n, i) => n == null
+              ? <p key={i} className="text-muted-foreground">…</p>
+              : <p key={i} className="truncate font-medium" title={renderCopyName(sample, n)}>{renderCopyName(sample, n)}</p>)}
+            {!numbered && validCount > 1 && (
+              <p className="text-amber-700">Todas las copias tendrán el mismo nombre.</p>
+            )}
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -176,13 +208,6 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
             </div>
           </div>
           {countError && <p className="text-xs text-destructive -mt-2">{countError}</p>}
-
-          {!countError && total > 1 && (
-            <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2">
-              Se crearán <strong>{total} copias</strong> en un lote numerado
-              {count > 1 ? <> («… (1)» a «… ({count})»)</> : null}. Sigue el avance en esta pantalla o en Trabajos.
-            </p>
-          )}
 
           <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
             <p className="font-medium text-foreground flex items-center gap-1">

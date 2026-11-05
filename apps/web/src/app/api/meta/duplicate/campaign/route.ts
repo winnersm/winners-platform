@@ -6,6 +6,7 @@ import { duplicationsQueue, JOB_TYPES } from "@/lib/queue";
 import { getActiveOperationId } from "@/lib/operation";
 import { DUPLICATE_LIMITS } from "@/lib/duplicate-limits";
 import { badRequest, errorResponse } from "@/lib/api-error";
+import { copyBaseName, renderCopyName } from "@/lib/copy-name";
 import { z } from "zod";
 
 // Una petición = un LOTE. Cada copia es un trabajo independiente (si una falla,
@@ -25,6 +26,8 @@ const schema = z.object({
   accountId: z.string().min(1),
   status: z.enum(["ACTIVE", "PAUSED"]),
   count: z.number().int().min(1).max(DUPLICATE_LIMITS.copiesPerCampaign).default(1),
+  /** Número de la primera copia. El nombre lleva {numero} donde va la cifra. */
+  startAt: z.number().int().min(0).max(1_000_000).default(1),
   bmId: z.string().optional(),
 });
 
@@ -38,7 +41,7 @@ export async function POST(req: NextRequest) {
     return badRequest(`Datos inválidos: la cantidad debe estar entre 1 y ${DUPLICATE_LIMITS.copiesPerCampaign} copias por campaña`, parsed.error.flatten());
   }
 
-  const { accountId, status, count, bmId } = parsed.data;
+  const { accountId, status, count, startAt, bmId } = parsed.data;
   const items = parsed.data.items
     ?? (parsed.data.campaignId && parsed.data.name ? [{ campaignId: parsed.data.campaignId, name: parsed.data.name }] : []);
   if (items.length === 0) return badRequest("Elige al menos una campaña para duplicar");
@@ -59,9 +62,9 @@ export async function POST(req: NextRequest) {
     for (const it of items) {
       for (let i = 0; i < count; i++) {
         seq++;
-        const jobName = count > 1 ? `${it.name} (${i + 1})` : it.name;
+        const jobName = renderCopyName(it.name, startAt + i);
         const data = {
-          campaignId: it.campaignId, accountId, name: jobName, status, bmId, operationId,
+          campaignId: it.campaignId, accountId, name: jobName, baseName: copyBaseName(it.name), status, bmId, operationId,
           batchId, seq, total,
         };
         const dbJob = await prisma.metaJob.create({
