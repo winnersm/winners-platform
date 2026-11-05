@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Briefcase, ExternalLink, Loader2, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { BatchCard, JobRow, groupJobs, type Job } from "@/components/job-list";
+import { JobSections, type Job } from "@/components/job-list";
+import { groupJobs } from "@/lib/job-groups";
 import { JOBS_DOCK_EVENTS } from "@/lib/jobs-dock-events";
 
 // Panel flotante de Trabajos, disponible en toda la plataforma. No bloquea la
@@ -190,9 +191,7 @@ export function JobsDock() {
                 {tab === "active" ? "No hay trabajos en curso" : tab === "failed" ? "Sin errores en las últimas 24 horas" : "No hay trabajos todavía"}
               </p>
             )}
-            {groups.map(g => g.batchId
-              ? <BatchCard key={g.key} batchId={g.batchId} jobs={g.jobs} visible={visible} onChanged={refresh} compact />
-              : <JobRow key={g.key} job={g.jobs[0]} onChanged={refresh} compact />)}
+            <JobSections groups={groups} now={nowTs} visible={visible} onChanged={refresh} compact />
           </div>
         </section>
       )}

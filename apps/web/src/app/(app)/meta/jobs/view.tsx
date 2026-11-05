@@ -5,7 +5,8 @@ import { RefreshCw, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BatchCard, JobRow, STATUS_LABEL, groupJobs, type Job } from "@/components/job-list";
+import { JobSections, STATUS_LABEL, type Job } from "@/components/job-list";
+import { groupJobs } from "@/lib/job-groups";
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -15,12 +16,14 @@ export default function JobsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [now, setNow] = useState(0);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/jobs");
     const json = await res.json();
     if (!res.ok) { setError(json.error ?? "Error"); return; }
     setJobs(json.jobs ?? []);
+    setNow(Date.now());
     setError(null);
   }, []);
 
@@ -43,7 +46,7 @@ export default function JobsView() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <Briefcase className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">Trabajos</h1>
@@ -55,7 +58,7 @@ export default function JobsView() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex gap-1 text-xs">
+          <div className="flex gap-1 flex-wrap text-xs">
             {["all", "pending", "processing", "completed", "failed", "cancelled"].map(s => (
               <button
                 key={s}
@@ -89,10 +92,8 @@ export default function JobsView() {
           {statusFilter === "all" ? "No hay trabajos todavía" : `No hay trabajos con estado «${STATUS_LABEL[statusFilter] ?? statusFilter}»`}
         </div>
       ) : (
-        <div className="space-y-2">
-          {groups.map(g => g.batchId
-            ? <BatchCard key={g.key} batchId={g.batchId} jobs={g.jobs} visible={statusFilter === "all" ? undefined : j => j.status === statusFilter} onChanged={load} />
-            : <JobRow key={g.key} job={g.jobs[0]} onChanged={load} />)}
+        <div className="space-y-4">
+          <JobSections groups={groups} now={now} onChanged={load} visible={statusFilter === "all" ? undefined : j => j.status === statusFilter} />
         </div>
       )}
     </div>

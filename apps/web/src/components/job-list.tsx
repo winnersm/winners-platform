@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock, Loader2, Ban, Trash2, AlertTriangle, ExternalLink, Layers } from "lucide-react";
+import {
+  ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock, Loader2, Ban, Trash2, AlertTriangle, ExternalLink,
+  Megaphone, Layers, Image as ImageIcon, RefreshCw, Camera, Briefcase,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +12,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { ErrorDetails, WaitingNote, toastApiError, type ErrorInfo } from "@/components/error-details";
+import {
+  describeGroup, formatSpan, kindOf, sectionize, type JobGroup, type JobKind,
+} from "@/lib/job-groups";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,6 +32,8 @@ export interface Job {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  accountName?: string | null;
+  userName?: string | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -64,32 +72,37 @@ function fmtDate(iso: string): string {
   });
 }
 
-function duration(createdAt: string, updatedAt: string): string {
-  const ms = new Date(updatedAt).getTime() - new Date(createdAt).getTime();
-  if (ms < 0) return "";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  return `${m}m ${rem}s`;
+const describeJob = (job: Job) => describeGroup(kindOf(job.type), [job]);
+
+// Cada tipo de trabajo con su color e icono, para distinguirlos de un vistazo.
+const KIND_TAG: Record<JobKind, { label: string; icon: typeof Layers; className: string }> = {
+  campaign: { label: "Campañas", icon: Megaphone, className: "bg-blue-50 text-blue-700 border-blue-200" },
+  adset: { label: "Ad sets", icon: Layers, className: "bg-violet-50 text-violet-700 border-violet-200" },
+  ad: { label: "Anuncios", icon: ImageIcon, className: "bg-amber-50 text-amber-700 border-amber-200" },
+  sync: { label: "Sincronización", icon: RefreshCw, className: "bg-slate-50 text-slate-600 border-slate-200" },
+  pbia: { label: "PBIA", icon: Camera, className: "bg-pink-50 text-pink-700 border-pink-200" },
+  other: { label: "Trabajo", icon: Briefcase, className: "bg-slate-50 text-slate-600 border-slate-200" },
+};
+
+function KindTag({ kind }: { kind: JobKind }) {
+  const { label, icon: Icon, className } = KIND_TAG[kind];
+  return (
+    <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${className}`}>
+      <Icon className="h-3 w-3" /> {label}
+    </span>
+  );
 }
 
-function jobTitle(job: Job): string {
-  const inp = job.input ?? {};
-  if (job.type === "DUPLICATE_CAMPAIGN") {
-    return `${inp.name ?? inp.campaignId ?? "—"}`;
-  }
-  if (job.type === "DUPLICATE_ADSET") {
-    const ids = Array.isArray(inp.adsetIds) ? inp.adsetIds as string[] : [];
-    const target = (inp.targetCampaignName as string) || (inp.targetCampaignId as string) || "";
-    return `${ids.length} ad set${ids.length !== 1 ? "s" : ""} → ${target}`;
-  }
-  if (job.type === "DUPLICATE_AD") {
-    const ads = Array.isArray(inp.ads) ? inp.ads as unknown[] : [];
-    const target = (inp.targetAdsetName as string) || (inp.targetAdsetId as string) || "";
-    return `${ads.length} ad${ads.length !== 1 ? "s" : ""} → ${target}`;
-  }
-  return job.id;
+/** Cuenta, persona, fecha y tiempos: separa la espera en cola del trabajo real. */
+function MetaLine({ info, showDate = true }: { info: ReturnType<typeof describeGroup>; showDate?: boolean }) {
+  const parts = [
+    info.account,
+    info.person,
+    showDate && info.createdAt ? fmtDate(info.createdAt) : null,
+    info.queueMs != null && info.queueMs >= 60_000 ? `En cola ${formatSpan(info.queueMs)}` : null,
+    info.active === 0 && info.workMs != null ? `Trabajó ${formatSpan(info.workMs)}` : null,
+  ].filter(Boolean);
+  return <span className="text-[11px] text-muted-foreground">{parts.join(" · ")}</span>;
 }
 
 function outputSummary(job: Job): string | null {
@@ -122,7 +135,11 @@ function batchOf(job: Job): { id: string; seq: number; total: number } | null {
 
 // ─── Row ──────────────────────────────────────────────────────────────────────
 
-export function JobRow({ job, onChanged, compact = false }: { job: Job; onChanged: () => void; compact?: boolean }) {
+export function JobRow({ job, onChanged, compact = false, nested = false }: {
+  job: Job; onChanged: () => void; compact?: boolean;
+  /** Dentro de un grupo: el tipo y la cuenta ya se ven en la tarjeta. */
+  nested?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [acting, setActing] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -133,6 +150,9 @@ export function JobRow({ job, onChanged, compact = false }: { job: Job; onChange
   const batch = batchOf(job);
   const newCampaignId = typeof job.output?.newCampaignId === "string" ? job.output.newCampaignId : null;
   const accountId = typeof job.input?.accountId === "string" ? job.input.accountId : null;
+  const info = describeJob(job);
+  const kind = kindOf(job.type);
+  const result = kind === "campaign" ? outputSummary(job) : info.result;
 
   function openConfirm(e: React.MouseEvent) {
     e.stopPropagation();
@@ -158,29 +178,26 @@ export function JobRow({ job, onChanged, compact = false }: { job: Job; onChange
   return (
     <div className={`border rounded-lg bg-white ${isActive ? "border-blue-200 shadow-sm" : "border-border"}`}>
       <div
-        className={`flex items-center cursor-pointer hover:bg-muted/20 transition-colors ${compact ? "gap-2 px-3 py-2" : "gap-3 px-4 py-3"}`}
+        className={`flex items-center flex-wrap sm:flex-nowrap cursor-pointer hover:bg-muted/20 transition-colors ${compact ? "gap-2 px-3 py-2" : "gap-3 px-4 py-3"}`}
         onClick={() => setOpen(o => !o)}
       >
         <div className="shrink-0">{STATUS_ICONS[job.status] ?? <Clock className="h-4 w-4" />}</div>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            {!compact && <span className="text-xs font-medium text-muted-foreground">{TYPE_LABELS[job.type] ?? job.type}</span>}
+        <div className="flex-1 min-w-0 basis-[calc(100%-1.75rem)] sm:basis-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {!nested && <KindTag kind={kind} />}
             {batch && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0" title={`Lote ${batch.id}`}>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0" title={`Lote ${batch.id}`}>
                 {batch.seq}/{batch.total}
               </Badge>
             )}
-            <span className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`} title={jobTitle(job)}>{jobTitle(job)}</span>
+            <span className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`} title={info.subject}>{info.subject}</span>
           </div>
           <div className="flex items-center gap-x-3 gap-y-0.5 mt-0.5 flex-wrap">
-            <span className="text-[11px] text-muted-foreground">{fmtDate(job.createdAt)}</span>
-            {(job.status === "completed" || job.status === "failed") && (
-              <span className="text-[11px] text-muted-foreground">{duration(job.createdAt, job.updatedAt)}</span>
-            )}
-            {job.status === "completed" && outputSummary(job) && (
-              <span className="text-[11px] text-green-700">{outputSummary(job)}</span>
-            )}
+            {result && <span className={`text-[11px] font-medium ${job.status === "completed" ? "text-green-700" : "text-foreground"}`}>{result}</span>}
+            {nested
+              ? <span className="text-[11px] text-muted-foreground">{fmtDate(job.createdAt)}</span>
+              : <MetaLine info={info} />}
             {job.status === "completed" && issues.length > 0 && (
               <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
                 <AlertTriangle className="h-3 w-3" /> {issues.length} incidencia{issues.length > 1 ? "s" : ""}
@@ -188,13 +205,14 @@ export function JobRow({ job, onChanged, compact = false }: { job: Job; onChange
             )}
             {waiting && <WaitingNote reason={waiting.reason} until={waiting.until} />}
             {job.status === "failed" && job.error && (
-              <span className="text-[11px] text-red-600 truncate max-w-[420px]" title={job.error}>{job.error}</span>
+              <span className="text-[11px] text-red-600 truncate max-w-full" title={job.error}>{job.error}</span>
             )}
           </div>
         </div>
 
-        <div className={`flex items-center shrink-0 ${compact ? "gap-1.5" : "gap-3"}`}>
-          {!compact && (
+        <div className={`flex items-center shrink-0 w-full justify-end sm:w-auto ${compact ? "gap-1.5" : "gap-3"}`}>
+          {/* «Completado» es lo normal: solo se destaca lo que pide atención. */}
+          {!compact && job.status !== "completed" && (
             <Badge variant={STATUS_BADGE[job.status] ?? "outline"} className="text-xs">
               {STATUS_LABEL[job.status] ?? job.status}
             </Badge>
@@ -312,7 +330,7 @@ export function JobRow({ job, onChanged, compact = false }: { job: Job; onChange
           </DialogHeader>
           <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
             <span className="text-muted-foreground">{TYPE_LABELS[job.type] ?? job.type}: </span>
-            <span className="font-medium">{jobTitle(job)}</span>
+            <span className="font-medium">{info.subject}</span>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={acting}>
@@ -333,31 +351,44 @@ export function JobRow({ job, onChanged, compact = false }: { job: Job; onChange
   );
 }
 
-// ─── Lote ─────────────────────────────────────────────────────────────────────
-// Una tanda de copias se ve como una sola tarjeta: de 50 filas sueltas, lo que
-// importa es cuántas van, cuántas fallaron y por qué.
+// ─── Grupo ────────────────────────────────────────────────────────────────────
+// Una tanda se ve como una sola tarjeta: lo que importa es qué se hizo, cuánto
+// va y qué falló. Sirve para los lotes y para los envíos seguidos de ad sets.
 
-export function BatchCard({ batchId, jobs, visible, onChanged, compact = false }: {
-  batchId: string; jobs: Job[]; visible?: (job: Job) => boolean; onChanged: () => void; compact?: boolean;
+/** Barra por colores: verde listas, rojo error, gris canceladas, azul en curso. */
+function StatusBar({ counts, total, compact }: {
+  counts: { completed: number; failed: number; cancelled: number; processing: number }; total: number; compact: boolean;
+}) {
+  const parts: Array<[number, string]> = [
+    [counts.completed, "bg-green-500"], [counts.failed, "bg-red-500"],
+    [counts.cancelled, "bg-slate-400"], [counts.processing, "bg-blue-500"],
+  ];
+  const finished = counts.completed + counts.failed + counts.cancelled;
+  return (
+    <div className={compact ? "w-16" : "w-28"}>
+      <div className="flex h-1.5 overflow-hidden rounded-full bg-muted">
+        {parts.map(([n, color]) => n > 0 && <div key={color} className={color} style={{ width: `${(n / Math.max(1, total)) * 100}%` }} />)}
+      </div>
+      <span className="text-[10px] text-muted-foreground">{finished}/{total}</span>
+    </div>
+  );
+}
+
+function GroupCard({ group, visible, onChanged, compact }: {
+  group: JobGroup<Job>; visible?: (job: Job) => boolean; onChanged: () => void; compact: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const { jobs, kind, batchId } = group;
 
-  // Los contadores miran el lote completo; el filtro solo decide qué filas se despliegan.
+  // Los contadores miran el grupo completo; el filtro solo decide qué filas se despliegan.
+  const info = describeGroup(kind, jobs);
+  const { counts, active } = info;
+  const total = Number(jobs[0]?.input?.total) || jobs.length;
+  const withIssues = jobs.filter(j => j.status === "completed" && issuesOf(j).length > 0).length;
   const ordered = jobs
     .filter(j => !visible || visible(j))
-    .sort((a, b) => Number(a.input?.seq ?? 0) - Number(b.input?.seq ?? 0));
-  const total = Number(jobs[0]?.input?.total ?? jobs.length);
-  const by = (st: string) => jobs.filter(j => j.status === st).length;
-  const done = by("completed"), failed = by("failed"), cancelled = by("cancelled");
-  const running = by("processing"), queued = by("pending");
-  const withIssues = jobs.filter(j => j.status === "completed" && issuesOf(j).length > 0).length;
-  const active = running + queued;
-  const pct = Math.round(((done + failed + cancelled) / Math.max(1, total)) * 100);
-
-  // Nombre base sin el «(n)» de cada copia.
-  const names = [...new Set(jobs.map(j => String(j.input?.name ?? "").replace(/ \(\d+\)$/, "")))];
-  const title = names.length === 1 ? names[0] : `${names.length} campañas`;
+    .sort((a, b) => Number(a.input?.seq ?? 0) - Number(b.input?.seq ?? 0) || a.createdAt.localeCompare(b.createdAt));
 
   // Por qué falló, sin repetir: normalmente todas caen por lo mismo.
   const errorTitles = [...new Set(jobs
@@ -367,13 +398,16 @@ export function BatchCard({ batchId, jobs, visible, onChanged, compact = false }
 
   async function cancel(e: React.MouseEvent) {
     e.stopPropagation();
-    if (!confirm(`¿Cancelar lo pendiente de este lote (${active} de ${total})? Lo ya creado en Meta no se borra.`)) return;
+    if (!confirm(`¿Cancelar lo pendiente de este grupo (${active} de ${jobs.length})? Lo ya creado en Meta no se borra.`)) return;
     setCancelling(true);
     try {
-      const res = await fetch(`/api/jobs?batchId=${batchId}`, { method: "DELETE" });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) { toastApiError(json, "No se pudo cancelar el lote"); return; }
-      toast.success(`${json.cancelled ?? 0} trabajo(s) del lote cancelados`);
+      const pending = jobs.filter(j => j.status === "pending" || j.status === "processing");
+      const responses = batchId
+        ? [await fetch(`/api/jobs?batchId=${batchId}`, { method: "DELETE" })]
+        : await Promise.all(pending.map(j => fetch(`/api/jobs/${j.id}`, { method: "DELETE" })));
+      const failedRes = responses.find(r => !r.ok);
+      if (failedRes) { toastApiError(await failedRes.json().catch(() => ({})), "No se pudo cancelar"); return; }
+      toast.success(`${pending.length} trabajo(s) cancelados`);
       onChanged();
     } catch {
       toast.error("No se pudo conectar con el servidor");
@@ -382,33 +416,30 @@ export function BatchCard({ batchId, jobs, visible, onChanged, compact = false }
     }
   }
 
-  const StatusIcon = failed > 0 ? XCircle : active > 0 ? Loader2 : CheckCircle2;
-  const iconClass = failed > 0 ? "text-red-500" : active > 0 ? "text-blue-500 animate-spin" : "text-green-600";
+  const StatusIcon = active > 0 ? Loader2 : counts.failed > 0 ? XCircle : CheckCircle2;
+  const iconClass = active > 0 ? "text-blue-500 animate-spin" : counts.failed > 0 ? "text-red-500" : "text-green-600";
 
   return (
     <div className={`border rounded-lg bg-white ${active > 0 ? "border-blue-200 shadow-sm" : "border-border"}`}>
-      <div className={`flex items-center cursor-pointer hover:bg-muted/20 transition-colors ${compact ? "gap-2 px-3 py-2 flex-wrap sm:flex-nowrap" : "gap-3 px-4 py-3"}`} onClick={() => setOpen(o => !o)}>
+      <div className={`flex items-center cursor-pointer hover:bg-muted/20 transition-colors flex-wrap sm:flex-nowrap ${compact ? "gap-2 px-3 py-2" : "gap-3 px-4 py-3"}`} onClick={() => setOpen(o => !o)}>
         <StatusIcon className={`h-4 w-4 shrink-0 ${iconClass}`} />
-        <div className={`flex-1 min-w-0 ${compact ? "basis-[calc(100%-1.5rem)] sm:basis-0" : ""}`}>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
-              <Layers className="h-3 w-3" /> Lote{compact ? "" : ` · ${TYPE_LABELS[jobs[0].type] ?? jobs[0].type}`}
-            </span>
-            <span className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`} title={title}>{title}</span>
+        <div className="flex-1 min-w-0 basis-[calc(100%-1.75rem)] sm:basis-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <KindTag kind={kind} />
+            <span className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`} title={info.subject}>{info.subject}</span>
           </div>
           <div className="flex items-center gap-x-3 gap-y-0.5 mt-0.5 flex-wrap text-[11px]">
-            <span className="text-muted-foreground">{fmtDate(jobs[jobs.length - 1].createdAt)}</span>
-            <span className="font-medium">{total} copias</span>
-            <span className="text-green-700">{done} listas</span>
-            {failed > 0 && <span className="text-red-600">{failed} con error</span>}
-            {running > 0 && <span className="text-blue-600">{running} en curso</span>}
-            {queued > 0 && <span className="text-muted-foreground">{queued} en cola</span>}
-            {cancelled > 0 && <span className="text-muted-foreground">{cancelled} canceladas</span>}
+            <span className={`font-medium ${counts.failed === 0 && active === 0 && counts.cancelled === 0 ? "text-green-700" : "text-foreground"}`}>{info.result}</span>
+            {counts.failed > 0 && <span className="text-red-600">{counts.failed} con error</span>}
+            {counts.processing > 0 && <span className="text-blue-600">{counts.processing} en curso</span>}
+            {counts.pending > 0 && <span className="text-muted-foreground">{counts.pending} en cola</span>}
+            {counts.cancelled > 0 && <span className="text-muted-foreground">{counts.cancelled} cancelada{counts.cancelled > 1 ? "s" : ""}</span>}
             {withIssues > 0 && (
               <span className="inline-flex items-center gap-1 text-amber-700">
                 <AlertTriangle className="h-3 w-3" /> {withIssues} con avisos
               </span>
             )}
+            <MetaLine info={info} />
           </div>
           {limited && <div className="mt-0.5"><WaitingNote reason={limited.reason} until={limited.until} /></div>}
           {errorTitles.map(t => (
@@ -416,17 +447,12 @@ export function BatchCard({ batchId, jobs, visible, onChanged, compact = false }
           ))}
         </div>
 
-        <div className={`flex items-center gap-3 shrink-0 ${compact ? "w-full justify-end sm:w-auto" : ""}`}>
-          <div className={compact ? "w-16" : "w-28"}>
-            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-              <div className={`h-full rounded-full transition-all duration-500 ${failed > 0 ? "bg-amber-500" : "bg-blue-500"}`} style={{ width: `${pct}%` }} />
-            </div>
-            <span className="text-[10px] text-muted-foreground">{done + failed + cancelled}/{total}</span>
-          </div>
+        <div className="flex items-center gap-3 shrink-0 w-full justify-end sm:w-auto">
+          <StatusBar counts={counts} total={total} compact={compact} />
           {active > 0 && (
             <Button variant="ghost" size="sm" className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={cancel} disabled={cancelling}>
               {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
-              <span className="ml-1 text-xs">{compact ? "Cancelar" : "Cancelar lote"}</span>
+              <span className="ml-1 text-xs">{compact ? "Cancelar" : "Cancelar todo"}</span>
             </Button>
           )}
           {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
@@ -435,26 +461,32 @@ export function BatchCard({ batchId, jobs, visible, onChanged, compact = false }
 
       {open && (
         <div className="border-t p-3 bg-muted/10 space-y-2">
-          {ordered.map(j => <JobRow key={j.id} job={j} onChanged={onChanged} compact={compact} />)}
+          {ordered.map(j => <JobRow key={j.id} job={j} onChanged={onChanged} compact={compact} nested />)}
         </div>
       )}
     </div>
   );
 }
 
-// Junta los trabajos de un mismo lote en la posición del más reciente.
-export function groupJobs(jobs: Job[]): Array<{ key: string; batchId?: string; jobs: Job[] }> {
-  const out: Array<{ key: string; batchId?: string; jobs: Job[] }> = [];
-  const seen = new Map<string, Job[]>();
-  for (const j of jobs) {
-    const b = batchOf(j);
-    if (!b) { out.push({ key: j.id, jobs: [j] }); continue; }
-    const list = seen.get(b.id);
-    if (list) { list.push(j); continue; }
-    const group = [j];
-    seen.set(b.id, group);
-    out.push({ key: b.id, batchId: b.id, jobs: group });
-  }
-  return out;
-}
+// ─── Secciones ────────────────────────────────────────────────────────────────
 
+/** Lista de Trabajos: lo que pide atención arriba y el historial por día. */
+export function JobSections({ groups, now, visible, onChanged, compact = false }: {
+  groups: JobGroup<Job>[]; now: number; visible?: (job: Job) => boolean; onChanged: () => void; compact?: boolean;
+}) {
+  return (
+    <>
+      {sectionize(groups, now).map(section => (
+        <section key={section.key} className="space-y-2">
+          <h3 className={`flex items-center gap-2 pt-1 text-xs font-semibold ${section.tone === "error" ? "text-red-600" : section.tone === "active" ? "text-blue-600" : "text-muted-foreground"}`}>
+            {section.label} <span className="font-normal">({section.groups.length})</span>
+            <span className="h-px flex-1 bg-border" />
+          </h3>
+          {section.groups.map(g => g.jobs.length > 1
+            ? <GroupCard key={g.key} group={g} visible={visible} onChanged={onChanged} compact={compact} />
+            : <JobRow key={g.key} job={g.jobs[0]} onChanged={onChanged} compact={compact} />)}
+        </section>
+      ))}
+    </>
+  );
+}

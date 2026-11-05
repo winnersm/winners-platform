@@ -29,7 +29,35 @@ export async function GET(req: NextRequest) {
     take: batchId ? 500 : 200,
   });
 
-  return NextResponse.json({ jobs });
+  return NextResponse.json({ jobs: await withNames(jobs) });
+}
+
+// Nombre de la cuenta y de quien lanzó cada trabajo, sin consultar a Meta.
+async function withNames<T extends { input: unknown; createdBy: string | null }>(jobs: T[]) {
+  const accountOf = (job: T) => {
+    const id = (job.input as { accountId?: unknown } | null)?.accountId;
+    return typeof id === "string" ? id.replace("act_", "") : null;
+  };
+  const accountIds = [...new Set(jobs.map(accountOf).filter((id): id is string => !!id))];
+  const userIds = [...new Set(jobs.map(j => j.createdBy).filter((id): id is string => !!id))];
+  const [accounts, users] = await Promise.all([
+    prisma.accountInsightSnapshot.findMany({
+      where: { accountId: { in: accountIds } },
+      distinct: ["accountId"],
+      select: { accountId: true, accountName: true },
+    }),
+    prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } }),
+  ]);
+  const accountName = new Map(accounts.map(a => [a.accountId, a.accountName]));
+  const userName = new Map(users.map(u => [u.id, u.name ?? u.email]));
+  return jobs.map(job => {
+    const account = accountOf(job);
+    return {
+      ...job,
+      accountName: account ? accountName.get(account) ?? null : null,
+      userName: job.createdBy ? userName.get(job.createdBy) ?? null : null,
+    };
+  });
 }
 
 // DELETE ?batchId=… → cancela todo lo pendiente o en curso de un lote.
