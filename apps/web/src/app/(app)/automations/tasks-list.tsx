@@ -56,11 +56,13 @@ export function TasksList({
   accounts,
   canEdit,
   masterOn,
+  pausedSince,
 }: {
   tasks: Task[];
   accounts: Account[];
   canEdit: boolean;
   masterOn: boolean;
+  pausedSince?: string;
 }) {
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState<string | null>(null);
@@ -78,8 +80,9 @@ export function TasksList({
     <div className="space-y-3">
       {!masterOn && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
-          Todas las automatizaciones están detenidas por el interruptor general. La
-          configuración de cada tarea se conserva, pero ninguna se ejecuta.
+          Todas las automatizaciones están detenidas por el interruptor general
+          {pausedSince ? ` desde el ${pausedSince}` : ""}. La configuración de cada tarea se
+          conserva, pero ninguna se ejecuta.
         </div>
       )}
 

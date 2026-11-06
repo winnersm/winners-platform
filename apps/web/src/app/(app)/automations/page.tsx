@@ -36,6 +36,13 @@ export default async function AutomationsPage() {
   const runByTask = new Map(lastRuns.map((r) => [r.taskName, r]));
   const pending = new Set(pendingTriggers.map((t) => t.taskName));
 
+  // Sin updatedBy, el flag viene de la migración: su updatedAt es la fecha de la copia,
+  // no la de la pausa, que quedó registrada en el sistema anterior.
+  const pausedAt = flag && !flag.value ? (flag.updatedBy ? flag.updatedAt : new Date("2026-08-30T02:59:12Z")) : null;
+  const pausedSince = pausedAt?.toLocaleDateString("es-CO", {
+    timeZone: "America/Bogota", day: "numeric", month: "long", year: "numeric",
+  });
+
   return (
     <div>
       <PageHeader
@@ -49,6 +56,7 @@ export default async function AutomationsPage() {
       <TasksList
         canEdit={canEdit}
         masterOn={flag?.value ?? true}
+        pausedSince={pausedSince}
         accounts={accounts.map((a) => ({
           id: a.accountId,
           name: a.accountName ?? a.accountId,
