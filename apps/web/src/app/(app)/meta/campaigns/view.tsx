@@ -435,43 +435,80 @@ function StatusLabel({ status }: { status: string }) {
   );
 }
 
+/** Estado desde el que una acción masiva tiene efecto: pausar solo toca lo activo, activar solo lo pausado. */
+const fromStatus = (target: EntityStatus): string => target === "ACTIVE" ? "PAUSED" : "ACTIVE";
+
+const STATUS_ACTION = {
+  PAUSED: {
+    label: "Pausar", busyLabel: "Pausando…", Icon: Pause, none: "Ninguna selección está activa",
+    tone: "border-warning/30 bg-warning-soft/60 text-warning hover:border-warning/50 hover:bg-warning-soft",
+  },
+  ACTIVE: {
+    label: "Activar", busyLabel: "Activando…", Icon: Play, none: "Ninguna selección está pausada",
+    tone: "border-success/30 bg-success-soft/60 text-success hover:border-success/50 hover:bg-success-soft",
+  },
+} as const;
+
+/** Pausar/Activar con su color. Muestra a cuántas afecta cuando no son todas las seleccionadas. */
+function StatusAction({ target, applicable, total, busy, spinning, onClick }: {
+  target: EntityStatus; applicable: number; total: number; busy: boolean; spinning: boolean; onClick: () => void;
+}) {
+  const { label, busyLabel, Icon, none, tone } = STATUS_ACTION[target];
+  // El botón desactivado no recibe el ratón: el aviso va en el contenedor.
+  return (
+    <span title={applicable === 0 ? none : undefined}>
+      <Button size="sm" variant="secondary" className={`h-7 text-xs ${tone}`} onClick={onClick} disabled={busy || applicable === 0}>
+        {spinning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5 fill-current" />}
+        {spinning ? busyLabel : label}
+        {!spinning && applicable > 0 && applicable < total ? <span className="tabular-nums opacity-70">{applicable}</span> : null}
+      </Button>
+    </span>
+  );
+}
+
 /** Barra que aparece al seleccionar: acciones masivas a mano. */
 function SelectionBar({
-  count, hidden = 0, noun, busy, onDuplicate, onStatus, onClear,
+  count, statuses, hidden = 0, noun, busy, onDuplicate, onStatus, onClear,
 }: {
-  count: number; hidden?: number; noun: string; busy: boolean;
+  count: number; statuses: string[]; hidden?: number; noun: string; busy: boolean;
   onDuplicate?: () => void; onStatus: (s: EntityStatus) => void; onClear: () => void;
 }) {
   const { confirmar, dialogo } = useConfirm();
+  const [lastAction, setLastAction] = useState<EntityStatus | null>(null);
   if (count === 0) return null;
+  const toPause = statuses.filter(s => s === fromStatus("PAUSED")).length;
+  const toActivate = statuses.filter(s => s === fromStatus("ACTIVE")).length;
+  const run = (target: EntityStatus) => { setLastAction(target); onStatus(target); };
   const activate = async () => {
     // Activar empieza a gastar presupuesto: una tanda no debe salir de un clic suelto.
     const ok = await confirmar({
-      title: `¿Activar ${count} ${noun}${count > 1 ? "s" : ""}?`,
-      description: count > 1 ? "Empezarán a gastar presupuesto." : "Empezará a gastar presupuesto.",
+      title: `¿Activar ${toActivate} ${noun}${toActivate > 1 ? "s" : ""}?`,
+      description: toActivate > 1 ? "Empezarán a gastar presupuesto." : "Empezará a gastar presupuesto.",
       confirmLabel: "Activar",
     });
-    if (ok) onStatus("ACTIVE");
+    if (ok) run("ACTIVE");
   };
   return (
-    <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 mb-2 flex-wrap">
-      <span className="text-xs font-medium">{count} {noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-warning"> · {hidden} fuera del filtro actual</span> : null}</span>
+    <div className="flex items-center gap-x-3 gap-y-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2 py-1.5 mb-2 flex-wrap motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150">
+      <span className="inline-flex items-center gap-2 text-xs font-medium" aria-live="polite">
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold tabular-nums text-primary-foreground">{count}</span>
+        <span>{noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-warning"> · {hidden} fuera del filtro actual</span> : null}</span>
+      </span>
       <div className="flex items-center gap-1.5 flex-wrap">
         {onDuplicate && (
-          <Button size="sm" className="h-7 text-xs" onClick={onDuplicate} disabled={busy}>
-            <Copy className="h-3.5 w-3.5 mr-1" /> Duplicar
-          </Button>
+          <>
+            <Button size="sm" className="h-7 text-xs shadow-sm shadow-primary/25" onClick={onDuplicate} disabled={busy}>
+              <Copy className="h-3.5 w-3.5" /> Duplicar
+            </Button>
+            <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+          </>
         )}
-        <Button size="sm" variant="outline" className="h-7 text-xs bg-card" onClick={() => onStatus("PAUSED")} disabled={busy}>
-          {busy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Pause className="h-3.5 w-3.5 mr-1" />} Pausar
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 text-xs bg-card" onClick={activate} disabled={busy}>
-          <Play className="h-3.5 w-3.5 mr-1" /> Activar
-        </Button>
-        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onClear} disabled={busy}>
-          <X className="h-3.5 w-3.5 mr-1" /> Limpiar
-        </Button>
+        <StatusAction target="PAUSED" applicable={toPause} total={count} busy={busy} spinning={busy && lastAction === "PAUSED"} onClick={() => run("PAUSED")} />
+        <StatusAction target="ACTIVE" applicable={toActivate} total={count} busy={busy} spinning={busy && lastAction === "ACTIVE"} onClick={activate} />
       </div>
+      <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs text-muted-foreground" onClick={onClear} disabled={busy}>
+        <X className="h-3.5 w-3.5" /> Quitar selección
+      </Button>
       {dialogo}
     </div>
   );
@@ -1008,6 +1045,7 @@ function ManagerInner() {
 
   // Selección del nivel actual (para la barra y la casilla de cabecera).
   const sel = level === "campaign" ? selectedCampaignIds : level === "adset" ? selectedAdsetIds : selectedAdIds;
+  const selEntities = (level === "campaign" ? campaigns : level === "adset" ? adsets : ads).filter(e => sel.has(e.id));
   const setSel = level === "campaign" ? setSelectedCampaignIds : level === "adset" ? setSelectedAdsetIds : setSelectedAdIds;
   const visIds = (level === "campaign" ? visCampaigns : level === "adset" ? visAdsets : visAds).map(r => r.id);
   const allSel = visIds.length > 0 && visIds.every(id => sel.has(id));
@@ -1161,6 +1199,7 @@ function ManagerInner() {
       {/* Barra de acciones de la selección */}
       <SelectionBar
         count={sel.size}
+        statuses={selEntities.map(e => e.status)}
         hidden={[...sel].filter(id => !visIds.includes(id)).length}
         noun={level === "campaign" ? "campaña" : level === "adset" ? "ad set" : "anuncio"}
         busy={bulkBusy}
@@ -1169,7 +1208,7 @@ function ManagerInner() {
             : level === "adset" ? () => setShowDuplicateAdsetsModal(true)
               : () => setShowDuplicateAdsModal(true)
         }
-        onStatus={s => bulkSetStatus(level, sel, s)}
+        onStatus={s => bulkSetStatus(level, new Set(selEntities.filter(e => e.status === fromStatus(s)).map(e => e.id)), s)}
         onClear={() => setSel(new Set())}
       />
 
@@ -1534,7 +1573,7 @@ function GlobalCampaignsView() {
   async function bulk(status: EntityStatus) {
     setBulkBusy(true);
     try {
-      const res = await bulkStatus(selRows.map(r => ({ id: r.camp.id, accountId: r.accId, bmId: r.bmId })), "campaign", status);
+      const res = await bulkStatus(selRows.filter(r => r.camp.status === fromStatus(status)).map(r => ({ id: r.camp.id, accountId: r.accId, bmId: r.bmId })), "campaign", status);
       const ok = new Set(res.ok);
       setRows(prev => prev.map(r => ok.has(r.camp.id) ? { ...r, camp: { ...r.camp, status } } : r));
       reportBulk(res, status);
@@ -1617,7 +1656,7 @@ function GlobalCampaignsView() {
       )}
 
       <SelectionBar
-        count={selected.size} hidden={[...selected].filter(k => !visKeys.includes(k)).length} noun="campaña" busy={bulkBusy}
+        count={selected.size} statuses={selRows.map(r => r.camp.status)} hidden={[...selected].filter(k => !visKeys.includes(k)).length} noun="campaña" busy={bulkBusy}
         onDuplicate={() => setDupTargets(selRows)}
         onStatus={bulk}
         onClear={() => setSelected(new Set())}
