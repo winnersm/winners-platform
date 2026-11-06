@@ -4,11 +4,10 @@ import { useEffect, useState, useCallback, Suspense, useRef, useSyncExternalStor
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   RefreshCw, Search, Copy, TrendingUp, Play, Pause, Briefcase, Building2,
-  ExternalLink, ChevronRight, X, CloudDownload, Loader2, CheckCircle2, AlertTriangle, Columns3,
+  ExternalLink, X, CloudDownload, Loader2, CheckCircle2, AlertTriangle, Columns3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -21,6 +20,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DuplicateCampaignModal } from "@/components/duplicate-campaign-modal";
+import { useConfirm } from "@/components/use-confirm";
 import { DuplicateAdsetsModal } from "@/components/duplicate-adsets-modal";
 import { DuplicateAdsModal } from "@/components/duplicate-ads-modal";
 import { ErrorDetails, errorInfoOf, toastApiError, type ErrorInfo } from "@/components/error-details";
@@ -87,10 +87,10 @@ const ENTITY_STATUS: Record<string, string> = { ACTIVE: "Activo", PAUSED: "Pausa
 // horizontal (salvo en móvil, donde taparían las métricas). Sus anchos son fijos porque el
 // `left` de cada columna fija depende de los de las anteriores.
 const STICKY_CHECK = "w-8 min-w-8 max-w-8 md:sticky md:left-0 z-10 bg-card group-hover:bg-muted";
-const STICKY_STATUS = "w-28 min-w-28 max-w-28 md:sticky md:left-8 z-10 bg-card group-hover:bg-muted";
-const STICKY_ACTIONS = "w-40 min-w-40 max-w-40 md:sticky md:left-36 z-10 bg-card group-hover:bg-muted md:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)] xl:shadow-none";
+const STICKY_STATUS = "w-16 min-w-16 max-w-16 md:sticky md:left-8 z-10 bg-card group-hover:bg-muted";
+const STICKY_ACTIONS = "w-20 min-w-20 max-w-20 md:sticky md:left-24 z-10 bg-card group-hover:bg-muted md:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)] xl:shadow-none";
 // El nombre solo se fija en pantallas anchas: antes dejaría sin sitio a las métricas.
-const STICKY_NAME = "max-w-[280px] min-w-[240px] xl:sticky xl:left-76 z-10 bg-card group-hover:bg-muted xl:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)]";
+const STICKY_NAME = "w-[260px] min-w-[260px] max-w-[260px] xl:sticky xl:left-44 z-10 bg-card group-hover:bg-muted xl:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)]";
 
 function fmtBudget(cents?: string, currency = "USD") {
   if (!cents) return "—";
@@ -392,30 +392,32 @@ function StatusCell({
 }) {
   const loading = loadingSet.has(entityId);
   const isActive = status === "ACTIVE";
+  if (status !== "ACTIVE" && status !== "PAUSED") {
+    return <span className="text-[10px] text-muted-foreground">{ENTITY_STATUS[status] ?? status}</span>;
+  }
   return (
-    <div className="flex items-center gap-1">
-      <Badge
-        variant={isActive ? "default" : status === "ARCHIVED" ? "outline" : "secondary"}
-        className="text-[10px] px-1.5 py-0 shrink-0"
-      >
-        {ENTITY_STATUS[status] ?? status}
-      </Badge>
-      {(status === "ACTIVE" || status === "PAUSED") && (
-        <button
-          onClick={e => { e.stopPropagation(); onToggle(entityId, status, entityType); }}
-          disabled={loading}
-          className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-          title={isActive ? "Pausar" : "Activar"}
-        >
-          {loading
-            ? <RefreshCw className="h-3 w-3 animate-spin" />
-            : isActive
-              ? <Pause className="h-3 w-3" />
-              : <Play className="h-3 w-3" />
-          }
-        </button>
-      )}
-    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={isActive}
+      aria-label={isActive ? "Activa: pausar" : "Pausada: activar"}
+      title={isActive ? "Activa · clic para pausar" : "Pausada · clic para activar"}
+      disabled={loading}
+      onClick={e => { e.stopPropagation(); onToggle(entityId, status, entityType); }}
+      className={`relative block h-4 w-7 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${isActive ? "bg-primary" : "bg-muted-foreground/35"}`}
+    >
+      <span className={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${isActive ? "translate-x-3" : ""}`} />
+    </button>
+  );
+}
+
+/** Estado de solo lectura (vista global), con el mismo color que el interruptor. */
+function StatusLabel({ status }: { status: string }) {
+  return (
+    <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${status === "ACTIVE" ? "bg-primary" : "bg-muted-foreground/50"}`} />
+      {ENTITY_STATUS[status] ?? status}
+    </span>
   );
 }
 
@@ -426,10 +428,16 @@ function SelectionBar({
   count: number; hidden?: number; noun: string; busy: boolean;
   onDuplicate?: () => void; onStatus: (s: EntityStatus) => void; onClear: () => void;
 }) {
+  const { confirmar, dialogo } = useConfirm();
   if (count === 0) return null;
-  const activate = () => {
+  const activate = async () => {
     // Activar empieza a gastar presupuesto: una tanda no debe salir de un clic suelto.
-    if (confirm(`¿Activar ${count} ${noun}${count > 1 ? "s" : ""}? Empezarán a gastar presupuesto.`)) onStatus("ACTIVE");
+    const ok = await confirmar({
+      title: `¿Activar ${count} ${noun}${count > 1 ? "s" : ""}?`,
+      description: count > 1 ? "Empezarán a gastar presupuesto." : "Empezará a gastar presupuesto.",
+      confirmLabel: "Activar",
+    });
+    if (ok) onStatus("ACTIVE");
   };
   return (
     <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 mb-2 flex-wrap">
@@ -450,6 +458,7 @@ function SelectionBar({
           <X className="h-3.5 w-3.5 mr-1" /> Limpiar
         </Button>
       </div>
+      {dialogo}
     </div>
   );
 }
@@ -603,6 +612,7 @@ function ManagerInner() {
   const router = useRouter();
   const accountId = searchParams.get("accountId");
   const bmId = searchParams.get("bmId") ?? undefined;
+  const { confirmar, dialogo } = useConfirm();
 
   const [accountList, setAccountList] = useState<Array<{ id: string; name: string; bmId: string; currency?: string }>>([]);
   const accountName = accountList.find(a => a.id === `act_${accountId}` || a.id === accountId)?.name ?? "";
@@ -884,6 +894,19 @@ function ManagerInner() {
     if (loadingStatus.has(entityId) || !accountId) return;
     const newStatus = currentStatus === "ACTIVE" ? "PAUSED" : "ACTIVE";
 
+    // Activar empieza a gastar presupuesto: el interruptor no debe hacerlo de un clic suelto.
+    if (newStatus === "ACTIVE") {
+      const list: Array<{ id: string; name: string }> = entityType === "campaign" ? campaigns : entityType === "adset" ? adsets : ads;
+      const name = list.find(e => e.id === entityId)?.name;
+      const ok = await confirmar({
+        title: `¿Activar ${entityType === "campaign" ? "esta campaña" : entityType === "adset" ? "este ad set" : "este anuncio"}?`,
+        description: "Empezará a gastar presupuesto.",
+        detail: name ? <span className="break-words">{name}</span> : undefined,
+        confirmLabel: "Activar",
+      });
+      if (!ok) return;
+    }
+
     patchStatus(entityType, new Set([entityId]), newStatus); // optimista
     setLoadingStatus(p => new Set([...p, entityId]));
     try {
@@ -1010,11 +1033,11 @@ function ManagerInner() {
 
   /** Botones visibles por fila. */
   const rowActions = (lvl: Level, id: string, extra?: React.ReactNode) => (
-    <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
+    <div className="-ml-1.5 flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
       {extra}
       <a
         href={adsManagerUrl(lvl, accountId, id)} target="_blank" rel="noreferrer"
-        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+        className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
         title="Abrir en Ads Manager"
       >
         <ExternalLink className="h-3.5 w-3.5" />
@@ -1143,9 +1166,9 @@ function ManagerInner() {
         </div>
       ) : error && visIds.length === 0 ? null : (
         <div className="rounded-lg border bg-card shadow-sm overflow-x-auto">
-          <Table className="w-full min-w-[1280px]">
+          <Table className="w-full min-w-[1100px]">
             <TableHeader>
-              <TableRow className="bg-muted/40 hover:bg-muted/40 border-b">
+              <TableRow className="hover:bg-transparent border-b">
                 <TableHead className={`py-2 ${STICKY_CHECK}`}>
                   <Checkbox checked={allSel} indeterminate={someSel} onToggle={toggleAll} label="Seleccionar todo" />
                 </TableHead>
@@ -1198,18 +1221,15 @@ function ManagerInner() {
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("campaign", c.id, (
                           <>
-                            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar campaña"
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar campaña" aria-label="Duplicar campaña"
                               onClick={() => setDuplicateTargets([c])}>
-                              <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
-                            </Button>
-                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Ver ad sets" onClick={() => drillAdsets(c)}>
-                              <ChevronRight className="h-3.5 w-3.5" />
+                              <Copy className="h-3.5 w-3.5" />
                             </Button>
                           </>
                         ))}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={c.name}>{c.name}</p>
+                        <p className="font-medium text-xs leading-tight whitespace-normal break-words line-clamp-2 group-hover:text-primary transition-colors" title={c.name}>{c.name}</p>
                       </TableCell>
                       <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
@@ -1242,18 +1262,15 @@ function ManagerInner() {
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("adset", a.id, (
                           <>
-                            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar ad set"
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar ad set" aria-label="Duplicar ad set"
                               onClick={() => { setSelectedAdsetIds(new Set([a.id])); setShowDuplicateAdsetsModal(true); }}>
-                              <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
-                            </Button>
-                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Ver anuncios" onClick={() => drillAds(a)}>
-                              <ChevronRight className="h-3.5 w-3.5" />
+                              <Copy className="h-3.5 w-3.5" />
                             </Button>
                           </>
                         ))}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
+                        <p className="font-medium text-xs leading-tight whitespace-normal break-words line-clamp-2 group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
                       </TableCell>
                       <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
@@ -1285,14 +1302,14 @@ function ManagerInner() {
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("ad", ad.id, ad.creative_id ? (
-                          <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar anuncio"
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar anuncio" aria-label="Duplicar anuncio"
                             onClick={() => { setSelectedAdIds(new Set([ad.id])); setShowDuplicateAdsModal(true); }}>
-                            <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
+                            <Copy className="h-3.5 w-3.5" />
                           </Button>
                         ) : null)}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight truncate" title={ad.name}>{ad.name}</p>
+                        <p className="font-medium text-xs leading-tight whitespace-normal break-words line-clamp-2" title={ad.name}>{ad.name}</p>
                       </TableCell>
                       <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2 text-[10px] text-muted-foreground font-mono truncate max-w-[80px]">
@@ -1348,6 +1365,8 @@ function ManagerInner() {
           onSuccess={() => { setShowDuplicateAdsModal(false); setSelectedAdIds(new Set()); }}
         />
       )}
+
+      {dialogo}
     </div>
   );
 }
@@ -1578,7 +1597,7 @@ function GlobalCampaignsView() {
       />
 
       <div className="rounded-lg border bg-card shadow-sm overflow-x-auto">
-        <Table className="w-full min-w-[1300px]">
+        <Table className="w-full min-w-[1220px]">
           <TableHeader>
             <TableRow className="border-b">
               <TableHead className={`py-2 ${STICKY_CHECK}`}>
@@ -1619,23 +1638,23 @@ function GlobalCampaignsView() {
                     <Checkbox checked={selected.has(k)} onToggle={() => toggleOne(k)} label={`Seleccionar ${r.camp.name}`} />
                   </TableCell>
                   <TableCell className={`py-2 ${STICKY_STATUS}`}>
-                    <Badge variant={r.camp.status === "ACTIVE" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">{ENTITY_STATUS[r.camp.status] ?? r.camp.status}</Badge>
+                    <StatusLabel status={r.camp.status} />
                   </TableCell>
                   <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
-                    <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
-                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar campaña" onClick={() => setDupTargets([r])}>
-                        <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
+                    <div className="-ml-1.5 flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar campaña" aria-label="Duplicar campaña" onClick={() => setDupTargets([r])}>
+                        <Copy className="h-3.5 w-3.5" />
                       </Button>
                       <a
                         href={adsManagerUrl("campaign", r.accId, r.camp.id)} target="_blank" rel="noreferrer"
-                        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
                         title="Abrir en Ads Manager"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                       </a>
                     </div>
                   </TableCell>
-                  <TableCell className={`py-2 ${STICKY_NAME}`}><span className="block truncate text-xs font-medium group-hover:text-primary" title={r.camp.name}>{r.camp.name}</span></TableCell>
+                  <TableCell className={`py-2 ${STICKY_NAME}`}><span className="text-xs leading-tight font-medium whitespace-normal break-words line-clamp-2 group-hover:text-primary" title={r.camp.name}>{r.camp.name}</span></TableCell>
                   <TableCell className="py-2"><span className="text-[11px] text-muted-foreground line-clamp-1">{r.accName}</span></TableCell>
                   <MetricCells metrics={calcMetrics(ins)} loading={false} columns={columns} currency={r.currency ?? "USD"} />
                 </TableRow>
