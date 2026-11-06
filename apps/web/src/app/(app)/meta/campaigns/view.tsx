@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import {
   RefreshCw, Search, Copy, TrendingUp, Play, Pause, Briefcase, Building2,
   ExternalLink, X, CloudDownload, Loader2, CheckCircle2, AlertTriangle, Columns3,
+  ChevronDown, ChevronLeft, ChevronRight, ArrowDownWideNarrow, ArrowUpNarrowWide,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -381,8 +382,8 @@ function useFx() {
   return { fx, toUsd };
 }
 
-function Checkbox({ checked, indeterminate, onToggle, label }: {
-  checked: boolean; indeterminate?: boolean; onToggle: () => void; label: string;
+function Checkbox({ checked, indeterminate, onToggle, label, className = "h-3.5 w-3.5" }: {
+  checked: boolean; indeterminate?: boolean; onToggle: () => void; label: string; className?: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate && !checked; }, [indeterminate, checked]);
@@ -390,8 +391,162 @@ function Checkbox({ checked, indeterminate, onToggle, label }: {
     <input
       ref={ref} type="checkbox" checked={checked} aria-label={label}
       onChange={() => { }} onClick={e => { e.stopPropagation(); onToggle(); }}
-      className="cursor-pointer h-3.5 w-3.5"
+      className={`cursor-pointer ${className}`}
     />
+  );
+}
+
+// ─── Vista móvil ──────────────────────────────────────────────────────────────
+// Por debajo de `md` la tabla se sustituye por tarjetas: las columnas no caben y
+// desplazarlas en horizontal con el pulgar hace perder de vista la campaña.
+
+const MOBILE_LABEL: Record<keyof Metrics, string> = {
+  sales: "Ventas", spend: "Gasto", revenue: "Ingresos", profit: "Profit", cpa: "CPA", roi: "ROI",
+  cpm: "CPM", cpc: "CPC", ctr: "CTR", uctr: "U-CTR", ic: "IC", costPerIc: "$/IC",
+};
+const MOBILE_PRIMARY: Array<keyof Metrics> = ["spend", "revenue", "profit", "roi"];
+const MOBILE_EXTRA: Array<keyof Metrics> = ["sales", "cpa", "cpm", "cpc", "ctr", "uctr", "ic", "costPerIc"];
+const MOBILE_SORT = [...COLUMNS.map(c => ({ value: c.key as string, label: MOBILE_LABEL[c.key] })), { value: "name", label: "Nombre" }];
+
+/** Importe abreviado: en una tarjeta no cabe una cifra completa en cuatro columnas. */
+function fmtShort(n: number, currency: string): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (currency !== "USD") return `${sign}${currency} ${fmtI(abs)}`;
+  return `${sign}${abs < 10_000 ? fmtC(abs) : `$${fmtI(abs)}`}`;
+}
+
+function MobileMetric({ metric, metrics, currency, loading }: {
+  metric: keyof Metrics; metrics: Metrics | null; currency: string; loading: boolean;
+}) {
+  const v = metrics?.[metric] ?? 0;
+  const text = Number.isNaN(v) ? "—"
+    : MONEY_KEYS.has(metric) ? fmtShort(v, currency)
+      : metric === "roi" ? `${v.toFixed(0)}%`
+        : metric === "ctr" || metric === "uctr" ? fmtP(v)
+          : fmtI(v);
+  const tone = !v ? "text-muted-foreground"
+    : metric === "profit" || metric === "roi" ? (v > 0 ? "text-success" : "text-danger") : "";
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] leading-4 text-muted-foreground">{MOBILE_LABEL[metric]}</p>
+      {loading ? <Ldr loading /> : <p className={`truncate text-[13px] leading-5 font-semibold tabular-nums ${tone}`}>{text}</p>}
+    </div>
+  );
+}
+
+function MobileMetricGrid({ list, metrics, currency, loading }: {
+  list: Array<keyof Metrics>; metrics: Metrics | null; currency: string; loading: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-4 gap-x-2 gap-y-2">
+      {list.map(k => <MobileMetric key={k} metric={k} metrics={metrics} currency={currency} loading={loading} />)}
+    </div>
+  );
+}
+
+/** Tarjeta de una campaña, ad set o anuncio. Tocarla entra al nivel siguiente, como la fila en desktop. */
+function MobileCard({
+  name, detail, metrics, currency, loading, stripe, selected, onToggle, status, onOpen, openLabel, onDuplicate, href,
+}: {
+  name: string; detail?: ReactNode; metrics: Metrics | null; currency: string; loading: boolean; stripe: string;
+  selected: boolean; onToggle: () => void; status: ReactNode;
+  onOpen?: () => void; openLabel?: string; onDuplicate?: () => void; href: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
+  return (
+    <article
+      className={`rounded-lg border transition-colors ${stripe} ${selected ? "border-primary/50 bg-primary/5" : "bg-card"} ${onOpen ? "cursor-pointer active:bg-muted" : ""}`}
+      onClick={onOpen}
+    >
+      <div className="flex items-start gap-1 pl-1 pr-3 pt-1">
+        <label className="flex h-11 w-10 shrink-0 cursor-pointer items-center justify-center" onClick={stop}>
+          <Checkbox checked={selected} onToggle={onToggle} label={`Seleccionar ${name}`} className="h-5 w-5" />
+        </label>
+        <div className="min-w-0 flex-1 pt-2">
+          <p className="text-sm font-medium leading-snug break-words line-clamp-2">{name}</p>
+          {detail ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p> : null}
+        </div>
+        <div className="shrink-0 pt-2.5 pl-2" onClick={stop}>{status}</div>
+      </div>
+
+      <div className="px-3 pt-2 pb-1"><MobileMetricGrid list={MOBILE_PRIMARY} metrics={metrics} currency={currency} loading={loading} /></div>
+      {expanded && (
+        <div className="px-3 pt-1 pb-1"><MobileMetricGrid list={MOBILE_EXTRA} metrics={metrics} currency={currency} loading={loading} /></div>
+      )}
+
+      <div className="flex items-center pl-1 pr-1" onClick={stop}>
+        <Button variant="ghost" size="sm" className="h-10 text-xs text-muted-foreground" aria-expanded={expanded} onClick={() => setExpanded(x => !x)}>
+          {expanded ? "Menos" : "Más métricas"}
+          <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </Button>
+        <div className="ml-auto flex items-center">
+          {onDuplicate && (
+            <Button variant="ghost" size="sm" className="size-10 p-0 text-muted-foreground" aria-label={`Duplicar ${name}`} onClick={onDuplicate}>
+              <Copy className="h-4 w-4" />
+            </Button>
+          )}
+          <a href={href} target="_blank" rel="noreferrer" aria-label="Abrir en Ads Manager"
+            className="inline-flex size-10 items-center justify-center rounded text-muted-foreground active:bg-muted">
+            <ExternalLink className="h-4 w-4" />
+          </a>
+          {onOpen && (
+            <Button variant="ghost" size="sm" className="h-10 pr-1 text-xs text-primary" onClick={onOpen}>
+              {openLabel}<ChevronRight className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/** Total de lo visible y casilla de seleccionar todo, encima de las tarjetas. */
+function MobileSummary({ title, note, metrics, currency, loading, allSel, someSel, onToggleAll }: {
+  title: string; note?: string; metrics: Metrics; currency: string; loading: boolean;
+  allSel: boolean; someSel: boolean; onToggleAll: () => void;
+}) {
+  return (
+    <>
+      <div className="rounded-lg border bg-muted p-3">
+        <p className="mb-2 text-xs font-semibold">{title}{note ? <span className="font-normal text-muted-foreground"> · {note}</span> : null}</p>
+        <MobileMetricGrid list={MOBILE_PRIMARY} metrics={metrics} currency={currency} loading={loading} />
+      </div>
+      <label className="flex h-11 w-fit cursor-pointer items-center gap-2.5 pl-3 pr-3 text-xs text-muted-foreground">
+        <Checkbox checked={allSel} indeterminate={someSel} onToggle={onToggleAll} label="Seleccionar todo" className="h-5 w-5" />
+        Seleccionar todo
+      </label>
+    </>
+  );
+}
+
+/** Orden en móvil: sin cabeceras de columna que tocar. */
+function MobileSort({ sort, onChange, extra = [] }: {
+  sort: { key: string; dir: "asc" | "desc" } | null;
+  onChange: (s: { key: string; dir: "asc" | "desc" }) => void;
+  extra?: Array<{ value: string; label: string }>;
+}) {
+  const opts = [...MOBILE_SORT, ...extra];
+  const textual = (key: string) => key === "name" || key === "account";
+  return (
+    <div className="flex w-full items-center gap-2 md:hidden">
+      <Select value={sort?.key ?? ""} onValueChange={v => { if (v) onChange({ key: v, dir: textual(v) ? "asc" : "desc" }); }}>
+        <SelectTrigger className="flex-1 bg-card text-xs data-[size=default]:h-10" aria-label="Ordenar por">
+          <SelectValue>{sort ? `Ordenar: ${labelOf(opts, sort.key)}` : "Ordenar por…"}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {opts.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Button
+        variant="outline" size="sm" className="size-10 bg-card p-0" disabled={!sort}
+        aria-label={sort?.dir === "asc" ? "Orden ascendente: cambiar a descendente" : "Orden descendente: cambiar a ascendente"}
+        onClick={() => { if (sort) onChange({ ...sort, dir: sort.dir === "asc" ? "desc" : "asc" }); }}
+      >
+        {sort?.dir === "asc" ? <ArrowUpNarrowWide className="h-4 w-4" /> : <ArrowDownWideNarrow className="h-4 w-4" />}
+      </Button>
+    </div>
   );
 }
 
@@ -418,7 +573,7 @@ function StatusCell({
       title={isActive ? "Activa · clic para pausar" : "Pausada · clic para activar"}
       disabled={loading}
       onClick={e => { e.stopPropagation(); onToggle(entityId, status, entityType); }}
-      className={`relative block h-4 w-7 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${isActive ? "bg-primary" : "bg-muted-foreground/35"}`}
+      className={`relative block h-4 w-7 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 max-md:origin-right max-md:scale-125 max-md:after:absolute max-md:after:-inset-3 ${isActive ? "bg-primary" : "bg-muted-foreground/35"}`}
     >
       <span className={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${isActive ? "translate-x-3" : ""}`} />
     </button>
@@ -456,8 +611,8 @@ function StatusAction({ target, applicable, total, busy, spinning, onClick }: {
   const { label, busyLabel, Icon, none, tone } = STATUS_ACTION[target];
   // El botón desactivado no recibe el ratón: el aviso va en el contenedor.
   return (
-    <span title={applicable === 0 ? none : undefined}>
-      <Button size="sm" variant="secondary" className={`h-7 text-xs ${tone}`} onClick={onClick} disabled={busy || applicable === 0}>
+    <span className="max-md:flex-1" title={applicable === 0 ? none : undefined}>
+      <Button size="sm" variant="secondary" className={`h-7 text-xs max-md:h-10 max-md:w-full ${tone}`} onClick={onClick} disabled={busy || applicable === 0}>
         {spinning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5 fill-current" />}
         {spinning ? busyLabel : label}
         {!spinning && applicable > 0 && applicable < total ? <span className="tabular-nums opacity-70">{applicable}</span> : null}
@@ -489,25 +644,25 @@ function SelectionBar({
     if (ok) run("ACTIVE");
   };
   return (
-    <div className="flex items-center gap-x-3 gap-y-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2 py-1.5 mb-2 flex-wrap motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150">
-      <span className="inline-flex items-center gap-2 text-xs font-medium" aria-live="polite">
+    <div className="flex items-center gap-x-3 gap-y-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2 py-1.5 mb-2 flex-wrap motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150 max-md:fixed max-md:inset-x-2 max-md:bottom-[calc(env(safe-area-inset-bottom)+0.5rem)] max-md:z-[45] max-md:mb-0 max-md:bg-card max-md:shadow-xl">
+      <span className="inline-flex items-center gap-2 text-xs font-medium max-md:min-w-0 max-md:flex-1" aria-live="polite">
         <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold tabular-nums text-primary-foreground">{count}</span>
         <span>{noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-warning"> · {hidden} fuera del filtro actual</span> : null}</span>
       </span>
-      <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="flex items-center gap-1.5 flex-wrap max-md:order-3 max-md:w-full max-md:flex-nowrap">
         {onDuplicate && (
           <>
-            <Button size="sm" className="h-7 text-xs shadow-sm shadow-primary/25" onClick={onDuplicate} disabled={busy}>
+            <Button size="sm" className="h-7 text-xs shadow-sm shadow-primary/25 max-md:h-10 max-md:flex-1" onClick={onDuplicate} disabled={busy}>
               <Copy className="h-3.5 w-3.5" /> Duplicar
             </Button>
-            <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+            <span className="mx-0.5 h-4 w-px bg-border max-md:hidden" aria-hidden />
           </>
         )}
         <StatusAction target="PAUSED" applicable={toPause} total={count} busy={busy} spinning={busy && lastAction === "PAUSED"} onClick={() => run("PAUSED")} />
         <StatusAction target="ACTIVE" applicable={toActivate} total={count} busy={busy} spinning={busy && lastAction === "ACTIVE"} onClick={activate} />
       </div>
-      <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs text-muted-foreground" onClick={onClear} disabled={busy}>
-        <X className="h-3.5 w-3.5" /> Quitar selección
+      <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs text-muted-foreground max-md:size-10 max-md:p-0" onClick={onClear} disabled={busy} aria-label="Quitar selección">
+        <X className="h-3.5 w-3.5 max-md:h-5 max-md:w-5" /> <span className="max-md:hidden">Quitar selección</span>
       </Button>
       {dialogo}
     </div>
@@ -530,20 +685,20 @@ function FreshnessBar({ freshness, now, loading, onRefresh, datePreset }: {
   const dot = state === "bad" ? "bg-red-500" : state === "warn" ? "bg-amber-500" : "bg-emerald-500";
   const text = state === "bad" ? "text-red-500" : state === "warn" ? "text-warning" : "text-muted-foreground";
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 max-md:min-w-0 max-md:flex-1 max-md:justify-between">
       {freshness.syncedAt && (
         <span className={`inline-flex items-center gap-1.5 text-[11px] ${text}`} title={`${new Date(freshness.syncedAt).toLocaleString("es-CO")} · ${label}`}>
           <span className="relative flex h-2 w-2" aria-hidden>
             <span className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${loading ? "bg-primary" : dot}`} style={{ animationDuration: state === "ok" ? "2.4s" : "1.2s" }} />
             <span className={`relative inline-flex h-2 w-2 rounded-full ${loading ? "bg-primary" : dot}`} />
           </span>
-          Actualizado {ago(freshness.syncedAt, now)} · {plan}
+          <span><span className="max-md:hidden">Actualizado </span>{ago(freshness.syncedAt, now)}<span className="max-md:hidden"> · {plan}</span></span>
         </span>
       )}
-      <Button variant="outline" size="sm" className={`h-7 px-2 text-xs bg-card ${ageMin > 15 && !loading ? "motion-safe:animate-bounce" : ""}`} onClick={onRefresh} disabled={loading}
+      <Button variant="outline" size="sm" className={`h-7 px-2 text-xs bg-card max-md:h-10 max-md:px-3 ${ageMin > 15 && !loading ? "motion-safe:animate-bounce" : ""}`} onClick={onRefresh} disabled={loading}
         title="Pide los datos a Meta ahora, sin usar copias guardadas.">
         {loading ? <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5 mr-1" />}
-        Sincronizar con Meta
+        Sincronizar<span className="max-md:hidden"> con Meta</span>
       </Button>
     </div>
   );
@@ -860,7 +1015,7 @@ function ManagerInner() {
     setSelectedCampaignIds(new Set()); setSelectedAdsetIds(new Set()); setSelectedAdIds(new Set());
   }
 
-  async function drillAdsets(campaign: Campaign) {
+  async function drillAdsets(campaign: Selection) {
     setSelCampaign({ id: campaign.id, name: campaign.name });
     setSelAdset(null);
     setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
@@ -1062,17 +1217,18 @@ function ManagerInner() {
     ? `Anuncios · ${selAdset.name.length > 18 ? selAdset.name.slice(0, 18) + "…" : selAdset.name}`
     : "Anuncios";
 
-  const tabBtn = (id: Level, label: string, active: boolean, onClick: () => void) => (
+  const tabBtn = (id: Level, label: string, short: string, active: boolean, onClick: () => void) => (
     <button
       key={id}
       onClick={onClick}
-      className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+      className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap max-md:flex-1 max-md:px-2 max-md:py-3 ${
         active
           ? "border-primary text-primary"
           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
       }`}
     >
-      {label}
+      <span className="max-md:hidden">{label}</span>
+      <span className="md:hidden">{short}</span>
     </button>
   );
 
@@ -1110,6 +1266,15 @@ function ManagerInner() {
     </div>
   );
 
+  // Nivel superior al que se vuelve en móvil.
+  const parentName = level === "ad" ? selAdset?.name : level === "adset" ? selCampaign?.name : undefined;
+  function goBack() {
+    if (level === "adset") void goToCampaigns();
+    else if (selCampaign) void drillAdsets(selCampaign);
+    else void goToAdsets();
+  }
+  const noun = level === "campaign" ? "campañas" : level === "adset" ? "ad sets" : "anuncios";
+
   const freshness: Freshness = insFresh.syncedAt && dataFresh.syncedAt
     ? (new Date(insFresh.syncedAt) < new Date(dataFresh.syncedAt) ? insFresh : dataFresh)
     : (dataFresh.syncedAt ? dataFresh : insFresh);
@@ -1120,7 +1285,7 @@ function ManagerInner() {
     <div className="space-y-0">
 
       {/* Cuenta actual */}
-      <div className="flex items-center gap-2 pb-2 text-sm">
+      <div className="flex items-center gap-2 pb-2 text-sm max-md:flex-wrap">
         <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
         <Select
           value={`act_${accountId}`}
@@ -1129,29 +1294,31 @@ function ManagerInner() {
             if (a) router.push(`/meta/campaigns?accountId=${a.id.replace("act_", "")}&bmId=${a.bmId}`);
           }}
         >
-          <SelectTrigger className="h-7 min-w-44 max-w-72 text-sm font-semibold bg-card" aria-label="Cambiar de cuenta">
+          <SelectTrigger className="h-7 min-w-0 md:min-w-44 max-w-72 text-sm font-semibold bg-card max-md:max-w-none max-md:flex-1 max-md:data-[size=default]:h-10" aria-label="Cambiar de cuenta">
             <SelectValue>{accountName || "Cuenta"}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {accountList.map(a => <SelectItem key={a.id} value={a.id} className="text-xs">{a.name}{a.currency && a.currency !== "USD" ? ` · ${a.currency}` : ""}</SelectItem>)}
           </SelectContent>
         </Select>
-        <span className="text-muted-foreground text-xs">· {accountId}{currency !== "USD" ? ` · ${currency}` : ""}</span>
-        <button className="ml-2 text-xs text-primary hover:underline" onClick={() => router.push("/meta/campaigns")}>
+        <span className="text-muted-foreground text-xs max-md:hidden">· {accountId}{currency !== "USD" ? ` · ${currency}` : ""}</span>
+        <button className="ml-2 text-xs text-primary hover:underline max-md:ml-0 max-md:w-full max-md:py-2 max-md:text-left" onClick={() => router.push("/meta/campaigns")}>
           Todas las cuentas
         </button>
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-0 border-b bg-card -mx-5 px-5">
-        {tabBtn("campaign", "Campañas", level === "campaign", goToCampaigns)}
-        {tabBtn("adset", adsetTabLabel, level === "adset", goToAdsets)}
-        {tabBtn("ad", adTabLabel, level === "ad", goToAds)}
+      <div className="flex items-center gap-0 border-b bg-card -mx-5 px-5 max-md:flex-wrap">
+        <div className="contents max-md:flex max-md:w-full">
+          {tabBtn("campaign", "Campañas", "Campañas", level === "campaign", goToCampaigns)}
+          {tabBtn("adset", adsetTabLabel, "Ad Sets", level === "adset", goToAdsets)}
+          {tabBtn("ad", adTabLabel, "Anuncios", level === "ad", goToAds)}
+        </div>
 
-        <div className="ml-auto flex items-center gap-2 py-1">
-          <TrendingUp className={`h-3.5 w-3.5 ${loadingInsights ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
+        <div className="ml-auto flex items-center gap-2 py-1 max-md:ml-0 max-md:w-full">
+          <TrendingUp className={`h-3.5 w-3.5 max-md:hidden ${loadingInsights ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
           <Select value={datePreset} onValueChange={v => v && setDatePreset(v)}>
-            <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none">
+            <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none max-md:data-[size=default]:h-10" aria-label="Periodo">
               <SelectValue>{labelOf(DATE_PRESETS, datePreset)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -1162,18 +1329,29 @@ function ManagerInner() {
         </div>
       </div>
 
+      {/* Dónde estoy y volver: en móvil las pestañas no caben con el nombre */}
+      {parentName && (
+        <button
+          className="flex min-h-11 w-full items-center gap-1 pt-2 text-left text-sm font-medium md:hidden"
+          onClick={goBack}
+        >
+          <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">{parentName}</span>
+        </button>
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center gap-2 pt-3 pb-2 flex-wrap">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
+        <div className="relative max-md:w-full">
+          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground max-md:top-3.5" />
           <Input
-            placeholder="Buscar..." className="pl-8 h-8 text-sm w-44 bg-card"
+            placeholder="Buscar..." className="pl-8 h-8 text-sm w-44 bg-card max-md:h-10 max-md:w-full max-md:text-base"
             value={nameFilter} onChange={e => setNameFilter(e.target.value)}
           />
         </div>
 
         <Select value={statusFilter} onValueChange={v => v && setStatusFilter(v)}>
-          <SelectTrigger className="h-8 w-32 text-xs bg-card">
+          <SelectTrigger className="h-8 w-32 text-xs bg-card max-md:flex-1 max-md:data-[size=default]:h-10" aria-label="Filtrar por estado">
             <SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -1181,17 +1359,18 @@ function ManagerInner() {
           </SelectContent>
         </Select>
 
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs text-muted-foreground max-md:hidden">
           {!loadingData && !error ? `${visIds.length} elementos` : null}
         </span>
 
         <Button
-          variant="outline" size="sm" className="h-8 text-xs ml-1"
+          variant="outline" size="sm" className="h-8 text-xs ml-1 max-md:ml-0 max-md:h-10 max-md:bg-card"
           onClick={openJobsDock}
         >
           <Briefcase className="h-3.5 w-3.5 mr-1" /> Trabajos
         </Button>
-        <div className="ml-auto"><ColumnPicker state={columnState} /></div>
+        <div className="ml-auto max-md:hidden"><ColumnPicker state={columnState} /></div>
+        <MobileSort sort={sort} onChange={setSort} />
       </div>
 
       <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={openJobsDock} />
@@ -1228,10 +1407,47 @@ function ManagerInner() {
       {/* Table */}
       {loadingData ? (
         <div className="space-y-1.5 pt-1">
-          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded" />)}
+          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded max-md:h-36" />)}
         </div>
-      ) : error && visIds.length === 0 ? null : (
-        <div className="rounded-lg border bg-card shadow-sm overflow-x-auto">
+      ) : error && visIds.length === 0 ? null : (<>
+        {/* Móvil: tarjetas */}
+        <div className={`space-y-2 md:hidden ${sel.size > 0 ? "pb-28" : ""}`}>
+          {visRows.length > 0 ? (
+            <MobileSummary
+              title={`Total · ${visRows.length} ${noun}`} metrics={totals} currency={currency} loading={loadingInsights}
+              allSel={allSel} someSel={someSel} onToggleAll={toggleAll}
+            />
+          ) : (
+            <p className="py-12 text-center text-sm text-muted-foreground">
+              Sin {noun}{statusFilter !== "ALL" ? ` (filtro: ${labelOf(STATUS_OPTS, statusFilter)})` : ""}
+            </p>
+          )}
+          {visRows.map(r => {
+            const ins = insightsMap[r.id];
+            const { daily_budget, lifetime_budget, creative_id } = r as Partial<Campaign> & Partial<Ad>;
+            return (
+              <MobileCard
+                key={r.id} name={r.name}
+                detail={daily_budget ? `Presupuesto diario ${fmtBudget(daily_budget, currency)}` : lifetime_budget ? `Presupuesto total ${fmtBudget(lifetime_budget, currency)}` : undefined}
+                metrics={calcMetrics(ins)} currency={currency} loading={loadingInsights}
+                stripe={stripeClass(ins, !loadingInsights)}
+                selected={sel.has(r.id)} onToggle={() => toggleOne(r.id)}
+                status={<StatusCell entityId={r.id} status={r.status} entityType={level} loadingSet={loadingStatus} onToggle={toggleStatus} />}
+                href={adsManagerUrl(level, accountId, r.id)}
+                onOpen={level === "campaign" ? () => drillAdsets(r) : level === "adset" ? () => drillAds(r) : undefined}
+                openLabel={level === "campaign" ? "Ad sets" : "Anuncios"}
+                onDuplicate={
+                  level === "campaign" ? () => setDuplicateTargets([r as Campaign])
+                    : level === "adset" ? () => { setSelectedAdsetIds(new Set([r.id])); setShowDuplicateAdsetsModal(true); }
+                      : creative_id ? () => { setSelectedAdIds(new Set([r.id])); setShowDuplicateAdsModal(true); } : undefined
+                }
+              />
+            );
+          })}
+        </div>
+
+        {/* Desktop: tabla */}
+        <div className="rounded-lg border bg-card shadow-sm overflow-x-auto max-md:hidden">
           <Table className="w-full min-w-[1100px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent border-b">
@@ -1389,12 +1605,12 @@ function ManagerInner() {
             </TableBody>
           </Table>
         </div>
-      )}
+      </>)}
 
       {/* Load more */}
       {level === "campaign" && nextCursor && !loadingData && (
         <div className="flex justify-center pt-2">
-          <Button variant="outline" size="sm" onClick={() => loadCampaigns(false, nextCursor!)} disabled={loadingMore}>
+          <Button variant="outline" size="sm" className="max-md:h-10 max-md:w-full" onClick={() => loadCampaigns(false, nextCursor!)} disabled={loadingMore}>
             {loadingMore && <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" />}
             Cargar más
           </Button>
@@ -1595,15 +1811,15 @@ function GlobalCampaignsView() {
         <Building2 className="h-4 w-4 text-muted-foreground" />
         <span className="font-semibold text-sm">Todas las cuentas</span>
         <Select value="" onValueChange={(v) => { const a = accounts.find(x => x.id === v); if (a) router.push(`/meta/campaigns?accountId=${a.id.replace("act_", "")}&bmId=${a.bmId}`); }}>
-          <SelectTrigger className="h-7 text-xs w-52 ml-1"><SelectValue placeholder="Ver una cuenta…">Ver una cuenta…</SelectValue></SelectTrigger>
+          <SelectTrigger className="h-7 text-xs w-52 ml-1 max-md:ml-0 max-md:w-full max-md:data-[size=default]:h-10"><SelectValue placeholder="Ver una cuenta…">Ver una cuenta…</SelectValue></SelectTrigger>
           <SelectContent>
             {accounts.map(a => <SelectItem key={a.id} value={a.id} className="text-xs">{a.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <div className="ml-auto flex items-center gap-2">
-          <TrendingUp className={`h-3.5 w-3.5 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
+        <div className="ml-auto flex items-center gap-2 max-md:ml-0 max-md:w-full">
+          <TrendingUp className={`h-3.5 w-3.5 max-md:hidden ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
           <Select value={datePreset} onValueChange={v => v && setDatePreset(v)}>
-            <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none"><SelectValue>{labelOf(DATE_PRESETS, datePreset)}</SelectValue></SelectTrigger>
+            <SelectTrigger className="h-7 text-xs w-24 border-0 shadow-none max-md:data-[size=default]:h-10" aria-label="Periodo"><SelectValue>{labelOf(DATE_PRESETS, datePreset)}</SelectValue></SelectTrigger>
             <SelectContent>{DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
           </Select>
           <FreshnessBar
@@ -1614,15 +1830,15 @@ function GlobalCampaignsView() {
       </div>
 
       <div className="flex items-center gap-2 pt-1 pb-2 flex-wrap">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input placeholder="Buscar campaña o cuenta..." className="pl-8 h-8 text-sm w-56 bg-card" value={query} onChange={e => setQuery(e.target.value)} />
+        <div className="relative max-md:w-full">
+          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground max-md:top-3.5" />
+          <Input placeholder="Buscar campaña o cuenta..." className="pl-8 h-8 text-sm w-56 bg-card max-md:h-10 max-md:w-full max-md:text-base" value={query} onChange={e => setQuery(e.target.value)} />
         </div>
         <Select value={statusFilter} onValueChange={v => v && setStatusFilter(v)}>
-          <SelectTrigger className="h-8 w-32 text-xs bg-card"><SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue></SelectTrigger>
+          <SelectTrigger className="h-8 w-32 text-xs bg-card max-md:flex-1 max-md:data-[size=default]:h-10" aria-label="Filtrar por estado"><SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue></SelectTrigger>
           <SelectContent>{STATUS_OPTS.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}</SelectContent>
         </Select>
-        <span className="text-xs text-muted-foreground ml-1">
+        <span className="text-xs text-muted-foreground ml-1 max-md:order-last max-md:ml-0 max-md:w-full">
           {loading ? `${refreshing ? "Trayendo de Meta" : "Cargando"} ${done}/${total} cuentas…` : `${vis.length} campañas · ${total} cuentas`}
         </span>
         {problems.length > 0 && (
@@ -1630,10 +1846,11 @@ function GlobalCampaignsView() {
             <AlertTriangle className="h-3.5 w-3.5" /> {problems.length} aviso{problems.length > 1 ? "s" : ""} de cuentas
           </button>
         )}
-        <Button variant="outline" size="sm" className="h-8 text-xs ml-auto" onClick={openJobsDock}>
+        <Button variant="outline" size="sm" className="h-8 text-xs ml-auto max-md:ml-0 max-md:h-10 max-md:bg-card" onClick={openJobsDock}>
           <Briefcase className="h-3.5 w-3.5 mr-1" /> Trabajos
         </Button>
-        <ColumnPicker state={columnState} />
+        <div className="max-md:hidden"><ColumnPicker state={columnState} /></div>
+        <MobileSort sort={sort} onChange={setSort} extra={[{ value: "account", label: "Cuenta" }]} />
       </div>
 
       {showProblems && problems.length > 0 && (
@@ -1662,7 +1879,38 @@ function GlobalCampaignsView() {
         onClear={() => setSelected(new Set())}
       />
 
-      <div className="rounded-lg border bg-card shadow-sm overflow-x-auto">
+      {/* Móvil: tarjetas */}
+      <div className={`space-y-2 md:hidden ${selected.size > 0 ? "pb-28" : ""}`}>
+        {vis.length > 0 ? (
+          <MobileSummary
+            title={`Total · ${vis.length} campañas`} note={otherCurrencies.length > 0 ? "en USD aprox." : undefined}
+            metrics={totals} currency="USD" loading={false}
+            allSel={allSel} someSel={someSel} onToggleAll={() => setSelected(allSel ? new Set() : new Set(visKeys))}
+          />
+        ) : (
+          <p className="py-12 text-center text-sm text-muted-foreground">{loading ? "Cargando…" : "Sin campañas"}</p>
+        )}
+        {vis.map(r => {
+          const ins = insMap[r.camp.id];
+          const k = keyOf(r);
+          return (
+            <MobileCard
+              key={k} name={r.camp.name} detail={r.accName}
+              metrics={calcMetrics(ins)} currency={r.currency ?? "USD"} loading={false}
+              stripe={stripeClass(ins, true)}
+              selected={selected.has(k)} onToggle={() => toggleOne(k)}
+              status={<StatusLabel status={r.camp.status} />}
+              href={adsManagerUrl("campaign", r.accId, r.camp.id)}
+              onOpen={() => router.push(`/meta/campaigns?accountId=${r.accId}&bmId=${r.bmId}`)}
+              openLabel="Cuenta"
+              onDuplicate={() => setDupTargets([r])}
+            />
+          );
+        })}
+      </div>
+
+      {/* Desktop: tabla */}
+      <div className="rounded-lg border bg-card shadow-sm overflow-x-auto max-md:hidden">
         <Table className="w-full min-w-[1220px]">
           <TableHeader>
             <TableRow className="border-b">
