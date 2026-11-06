@@ -18,9 +18,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 from . import config as cfg_module
+from .meta_calls import meta_urlopen
 from . import db as db_module
 
 log = logging.getLogger(__name__)
+
+ORIGEN = "UPDATE_SHEET"
 
 COL_TZ = timezone(timedelta(hours=-5))
 JVZOO_TZ = timezone(timedelta(hours=-4))
@@ -82,7 +85,7 @@ def extract_account_key(header_text):
 
 # ─────────────────────────── Meta API ───────────────────────────
 
-def get_all_accounts(token: str, active_only: bool = True) -> dict:
+def get_all_accounts(token: str, active_only: bool = True, source: str = ORIGEN) -> dict:
     """Devuelve {act_id: name} para las cuentas del token vía /me/adaccounts.
     active_only=True (default) retorna solo account_status==1. False retorna todas."""
     params = urllib.parse.urlencode({
@@ -92,7 +95,7 @@ def get_all_accounts(token: str, active_only: bool = True) -> dict:
     })
     try:
         req = urllib.request.Request(f"https://graph.facebook.com/v21.0/me/adaccounts?{params}")
-        resp = urllib.request.urlopen(req, timeout=15)
+        resp = meta_urlopen(req, source, timeout=15)
         data = json.loads(resp.read())
         accounts = {
             acc["id"]: acc["name"]
@@ -130,7 +133,7 @@ def get_fb_spend_batch(account_ids: list, date_str: str, fb_tokens: list):
 
         try:
             req = urllib.request.Request("https://graph.facebook.com/v21.0/", data=data, method="POST")
-            resp = urllib.request.urlopen(req, timeout=30)
+            resp = meta_urlopen(req, ORIGEN, timeout=30)
             batch_results = json.loads(resp.read())
         except Exception as e:
             last_error = str(e)

@@ -11,12 +11,14 @@ from datetime import datetime, timedelta, timezone
 
 from . import config as cfg_module
 from . import db
+from .meta_calls import meta_urlopen
 from .update_sheet import get_all_accounts
 
 log = logging.getLogger(__name__)
 
 COL_TZ = timezone(timedelta(hours=-5))
 REMINDER_HOURS = 4
+ORIGEN = "BILLING_CHECK"
 
 BILLING_FIELDS = "id,name,account_id,account_status,disable_reason,balance,amount_spent,spend_cap,currency,funding_source,business"
 
@@ -87,7 +89,7 @@ def _fetch_batch(account_ids: list, tokens: list) -> dict:
         }).encode()
         try:
             req = urllib.request.Request("https://graph.facebook.com/v21.0/", data=data, method="POST")
-            resp = urllib.request.urlopen(req, timeout=45)
+            resp = meta_urlopen(req, ORIGEN, timeout=45)
             batch_results = json.loads(resp.read())
 
             results = {}
@@ -180,7 +182,7 @@ def run(task=None):
         return
 
     bc = _build_config(cfg)
-    fb_accounts: dict = get_all_accounts(bc["fb_token"], active_only=False)
+    fb_accounts: dict = get_all_accounts(bc["fb_token"], active_only=False, source=ORIGEN)
     if task is not None:
         fb_accounts = task.filter_accounts(fb_accounts)
     if not fb_accounts:

@@ -11,12 +11,14 @@ from datetime import datetime, timedelta, timezone
 
 from . import config as cfg_module
 from . import db as db_module
+from .meta_calls import meta_urlopen
 from .update_sheet import get_all_accounts
 
 log = logging.getLogger(__name__)
 
 COL_TZ = timezone(timedelta(hours=-5))
 FB_API_VERSION = "v21.0"
+ORIGEN = "META_CLEANUP"
 
 
 def _load_cfg() -> dict:
@@ -36,7 +38,7 @@ def _call_api(url: str, token: str, method: str = "GET", params: dict = None) ->
     else:
         data = urllib.parse.urlencode(params).encode()
         req = urllib.request.Request(url, data=data, method=method)
-    resp = urllib.request.urlopen(req, timeout=30)
+    resp = meta_urlopen(req, ORIGEN, timeout=30)
     return json.loads(resp.read())
 
 
@@ -54,7 +56,7 @@ def _paginate(url: str, token: str, params: dict):
                 req_params = {"access_token": token}
                 full_url = f"{next_url}&{urllib.parse.urlencode(req_params)}"
                 req = urllib.request.Request(full_url)
-                resp = urllib.request.urlopen(req, timeout=30)
+                resp = meta_urlopen(req, ORIGEN, timeout=30)
                 data = json.loads(resp.read())
             items.extend(data.get("data", []))
             next_url = data.get("paging", {}).get("next")
@@ -173,7 +175,7 @@ def run(task=None, dry_run: bool = False):
     token = conf["token"]
     slack_webhook = conf["slack_webhook"]
 
-    fb_accounts = get_all_accounts(token)
+    fb_accounts = get_all_accounts(token, source=ORIGEN)
     if task is not None:
         fb_accounts = task.filter_accounts(fb_accounts)
     if not fb_accounts:

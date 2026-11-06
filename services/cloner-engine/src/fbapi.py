@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .meta_calls import registrar_llamada, resultado_de
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(HERE, ".env")
 
@@ -25,6 +27,9 @@ RATE_LIMIT_CODES = {1, 2, 4, 17, 32, 613, 80000, 80004}
 # menos por pagina, y cada espera es tiempo tirado: una campana de cien
 # anuncios se pasaba cinco minutos reintentando lo mismo antes de rendirse.
 PEDIR_MENOS = "reduce the amount of data"
+
+# Etiqueta de este servicio en el reporte de «Llamadas a Meta».
+ORIGEN = "CLONER"
 
 
 class ApiError(Exception):
@@ -87,11 +92,16 @@ class Graph:
         while True:
             attempt += 1
             self.calls += 1
-            resp = self.session.request(method, url, timeout=120, **kwargs)
+            try:
+                resp = self.session.request(method, url, timeout=120, **kwargs)
+            except Exception:
+                registrar_llamada(ORIGEN, method, url, "error", kwargs.get("params"))
+                raise
             try:
                 payload = resp.json()
             except ValueError:
                 payload = {}
+            registrar_llamada(ORIGEN, method, url, resultado_de(resp.ok, payload), kwargs.get("params"))
 
             if resp.ok and not (isinstance(payload, dict) and "error" in payload):
                 return payload
@@ -168,9 +178,14 @@ class Graph:
             nxt = (page.get("paging") or {}).get("next")
             if not nxt:
                 return out
-            resp = self.session.get(nxt, timeout=120)
-            self.calls += 1
-            page = resp.json()
+            try:
+                resp = self.session.get(nxt, timeout=120)
+                self.calls += 1
+                page = resp.json()
+            except Exception:
+                registrar_llamada(ORIGEN, "GET", nxt, "error")
+                raise
+            registrar_llamada(ORIGEN, "GET", nxt, resultado_de(resp.ok, page))
             if "error" in page:
                 raise ApiError(page["error"], path)
 

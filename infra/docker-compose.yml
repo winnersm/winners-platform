@@ -186,6 +186,7 @@ services:
     env_file: .env.web
     environment:
       TZ: America/Bogota
+      REDIS_URL: redis://winners-redis:6379
     volumes:
       - automations-logs:/app/logs
     depends_on:
@@ -230,6 +231,7 @@ services:
     env_file: .env.web
     environment:
       TZ: America/Bogota
+      REDIS_URL: redis://winners-redis:6379
     depends_on:
       winners-pg:
         condition: service_healthy
