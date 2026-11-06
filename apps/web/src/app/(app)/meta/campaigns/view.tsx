@@ -828,8 +828,12 @@ function ManagerInner() {
   const columnState = useColumns();
   const { columns } = columnState;
 
-  const [level, setLevel] = useState<Level>("campaign");
-  const [selCampaign, setSelCampaign] = useState<Selection | null>(null);
+  // Desde «Todas las cuentas» se llega con la campaña ya elegida: abre directo sus ad sets.
+  const campaignParam = searchParams.get("campaignId");
+  const [level, setLevel] = useState<Level>(campaignParam ? "adset" : "campaign");
+  const [selCampaign, setSelCampaign] = useState<Selection | null>(
+    campaignParam ? { id: campaignParam, name: searchParams.get("campaignName") ?? campaignParam } : null,
+  );
   const [selAdset, setSelAdset] = useState<Selection | null>(null);
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -992,7 +996,9 @@ function ManagerInner() {
   // ── Effects ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (accountId) { loadCampaigns(); loadInsights("campaign", datePreset); }
+    if (!accountId) return;
+    if (selCampaign) loadAdsets(selCampaign.id); else loadCampaigns();
+    loadInsights(level, datePreset);
   }, [accountId]); // eslint-disable-line
 
   // Nombre y moneda de la cuenta actual. Usa el listado cacheado.
@@ -1780,6 +1786,10 @@ function GlobalCampaignsView() {
   const otherCurrencies = [...new Set(vis.map(r => r.currency ?? "USD"))].filter(c => c !== "USD");
 
   const keyOf = (r: GRow) => `${r.accId}:${r.camp.id}`;
+  const openCampaign = (r: GRow) => {
+    const p = new URLSearchParams({ accountId: r.accId, bmId: r.bmId, campaignId: r.camp.id, campaignName: r.camp.name });
+    router.push(`/meta/campaigns?${p}`);
+  };
   const visKeys = vis.map(keyOf);
   const allSel = visKeys.length > 0 && visKeys.every(k => selected.has(k));
   const someSel = visKeys.some(k => selected.has(k));
@@ -1901,8 +1911,8 @@ function GlobalCampaignsView() {
               selected={selected.has(k)} onToggle={() => toggleOne(k)}
               status={<StatusLabel status={r.camp.status} />}
               href={adsManagerUrl("campaign", r.accId, r.camp.id)}
-              onOpen={() => router.push(`/meta/campaigns?accountId=${r.accId}&bmId=${r.bmId}`)}
-              openLabel="Cuenta"
+              onOpen={() => openCampaign(r)}
+              openLabel="Ad sets"
               onDuplicate={() => setDupTargets([r])}
             />
           );
@@ -1947,7 +1957,7 @@ function GlobalCampaignsView() {
               const ins = insMap[r.camp.id];
               const k = keyOf(r);
               return (
-                <TableRow key={k} className="group cursor-pointer hover:bg-muted" onClick={() => router.push(`/meta/campaigns?accountId=${r.accId}&bmId=${r.bmId}`)}>
+                <TableRow key={k} className="group cursor-pointer hover:bg-muted" onClick={() => openCampaign(r)}>
                   <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, true)}`} onClick={e => e.stopPropagation()}>
                     <Checkbox checked={selected.has(k)} onToggle={() => toggleOne(k)} label={`Seleccionar ${r.camp.name}`} />
                   </TableCell>
