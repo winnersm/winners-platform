@@ -335,7 +335,7 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     }
     const opts = { removeOnComplete: true, removeOnFail: true };
     // Los schedulers con `every` ya lanzan una pasada inmediata al crearse/actualizarse.
-    // Rendimiento: «hoy» cada hora; 7 y 30 días cada 6 h. Cada pasada lee directo de Meta.
+    // Rendimiento: «hoy» cada hora; los demás filtros cada 6 h. Cada pasada lee directo de Meta.
     await syncQueue.upsertJobScheduler("sync-dashboard", { every: 60 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, data: { presets: DASHBOARD_HOURLY_PRESETS }, opts });
     await syncQueue.upsertJobScheduler("sync-dashboard-slow", { every: 6 * 60 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, data: { presets: DASHBOARD_SLOW_PRESETS }, opts });
     // Listados ligeros (campañas + métricas de campaña): cada 30 min.
@@ -347,7 +347,7 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     await syncQueue.upsertJobScheduler("sync-fanpages", { pattern: "0 5 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_FANPAGES, opts });
     // Gasto diario: 6:00 AM (hora Colombia). Reescribe los últimos días para captar ajustes tardíos de Meta.
     await syncQueue.upsertJobScheduler("sync-spend-daily", { pattern: "0 6 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_SPEND_DAILY, opts });
-    console.log("[worker] Sync programado: rendimiento (hoy 1 h, 7/30 días 6 h) + campañas (30 min) + ad sets/anuncios (6 h) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
+    console.log("[worker] Sync programado: rendimiento (hoy 1 h, demás filtros 6 h) + campañas (30 min) + ad sets/anuncios (6 h) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
   } catch (e) {
     console.error("[worker] No se pudo programar los syncs:", e);
   }

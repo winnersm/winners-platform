@@ -2,13 +2,12 @@ import { Prisma } from "@winners/db";
 import { prisma } from "@winners/db";
 import { getAdAccounts, getAccountInsights, type MetaInsights } from "@/lib/meta-api";
 
-// Presets que se sincronizan a DB (los más usados del dashboard). Otros presets
-// siguen sirviéndose en vivo (con caché/stale/coalescing).
-export const DASHBOARD_PRESETS = ["today", "last_7d", "last_30d"];
-
-// Ritmo del job: «hoy» cada hora; los periodos largos cambian poco, cada 6 h.
+// Filtros de fecha que se sincronizan a DB. Ritmo del job: «hoy» cada hora; los
+// demás cambian poco, cada 6 h. Solo las fechas personalizadas se sirven en vivo
+// (con caché/stale/coalescing).
 export const DASHBOARD_HOURLY_PRESETS = ["today"];
-export const DASHBOARD_SLOW_PRESETS = ["last_7d", "last_30d"];
+export const DASHBOARD_SLOW_PRESETS = ["yesterday", "last_7d", "last_14d", "last_30d", "this_month", "last_month", "maximum"];
+export const DASHBOARD_PRESETS = [...DASHBOARD_HOURLY_PRESETS, ...DASHBOARD_SLOW_PRESETS];
 
 // Sincroniza los insights a nivel cuenta de UNA operación → tabla snapshot.
 // Lee siempre directo de Meta (el ritmo lo marca quien llama, no el caché) y va
