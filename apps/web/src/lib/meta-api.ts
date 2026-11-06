@@ -1185,10 +1185,17 @@ export interface DuplicateResult {
   issues?: DuplicateIssue[];
 }
 
-// La configuración de la campaña original se lee una vez y la reutilizan todas
-// las copias de la tanda: así 50 copias no leen 50 veces lo mismo.
+// La configuración de la campaña original se lee una vez por tanda y la reutilizan todas
+// las copias de esa tanda (y sus reintentos): así 50 copias no leen 50 veces lo mismo.
+// Cada tanda nueva la borra al crearse (invalidateDuplicationSource).
 const SOURCE_TTL = 1800;
 interface CampaignSource { adsetCount: number; specs: AdsetSpec[]; issues: DuplicateIssue[] }
+
+/** Borra la lectura guardada de las campañas origen: la primera copia de la tanda vuelve a leer de Meta. */
+export async function invalidateDuplicationSource(campaignIds: string[]): Promise<void> {
+  if (campaignIds.length === 0) return;
+  await redis.del(...campaignIds.map((id) => `meta:dup-source:${id}`)).catch(() => {});
+}
 
 async function readCampaignSource(campaignId: string, token: string): Promise<CampaignSource> {
   const key = `meta:dup-source:${campaignId}`;

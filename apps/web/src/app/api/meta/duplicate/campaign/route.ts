@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@winners/db";
 import { duplicationsQueue, JOB_TYPES } from "@/lib/queue";
+import { invalidateDuplicationSource } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
 import { DUPLICATE_LIMITS } from "@/lib/duplicate-limits";
 import { badRequest, errorResponse } from "@/lib/api-error";
@@ -58,6 +59,10 @@ export async function POST(req: NextRequest) {
     const batchId = randomUUID();
     const jobIds: string[] = [];
     let seq = 0;
+
+    // Cada tanda arranca leyendo la configuración actual de las campañas origen:
+    // la primera copia la lee de Meta y las demás de la tanda reutilizan esa lectura.
+    await invalidateDuplicationSource([...new Set(items.map((it) => it.campaignId))]);
 
     for (const it of items) {
       for (let i = 0; i < count; i++) {
