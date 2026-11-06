@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 TZ_BOGOTA = timezone(timedelta(hours=-5))
 RETENCION_SEG = 90 * 24 * 60 * 60
 RETENCION_DETALLE_SEG = 7 * 24 * 60 * 60
-MAX_DETALLE_POR_HORA = 20000
+MAX_DETALLE_POR_HORA = 2000
 SEP = "\u0001"
 CODIGOS_LIMITE = {4, 17, 32, 613}
 SERVICIO = "automations-worker"

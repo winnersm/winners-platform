@@ -77,7 +77,7 @@ class Formato(unittest.TestCase):
         ] * 2)
         registro = "meta:calls:2026-11-06:log:9"
         pipe.rpush.assert_called_with(registro, "{}")
-        pipe.ltrim.assert_called_with(registro, -20000, -1)
+        pipe.ltrim.assert_called_with(registro, -2000, -1)
         pipe.expire.assert_has_calls([
             mock.call(registro, 7 * 86400),
             mock.call("meta:calls:2026-11-06", 90 * 86400),

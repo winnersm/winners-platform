@@ -2,9 +2,10 @@
 // de servidor: lo usan tanto la API como la vista. Las llamadas de los servicios Python
 // llegan con el mismo formato, así que solo hace falta explicarlas aquí.
 
-/** Duración y tope del detalle llamada a llamada (también en los meta_calls.py de los servicios). */
+/** Duración y tope del detalle llamada a llamada (también en los meta_calls.py de los servicios).
+ *  Redis tiene 512 MB y noeviction: si se llena, se paran las colas. El peor caso ronda 130 MB. */
 export const META_CALL_LOG_DAYS = 7;
-export const META_CALL_LOG_MAX_PER_HOUR = 20_000;
+export const META_CALL_LOG_MAX_PER_HOUR = 2_000;
 
 export const SOURCE_LABELS: Record<string, string> = {
   panel: "Panel (uso de las personas)",
