@@ -5,6 +5,7 @@ import { getActiveOperationId } from "@/lib/operation";
 import { readSnapshotWithAge, saveListingSnapshot } from "@/lib/listing-sync";
 import { errorResponse } from "@/lib/api-error";
 import { serializeError, userLine } from "@/lib/meta-errors";
+import { markMetaSource } from "@/lib/meta-calls";
 
 // Anuncios de una cuenta (o de un ad set). Misma política que /api/meta/campaigns.
 export async function GET(req: NextRequest) {
@@ -15,6 +16,7 @@ export async function GET(req: NextRequest) {
   const accountId = searchParams.get("accountId");
   const adsetId = searchParams.get("adsetId");
   const refresh = searchParams.get("refresh") === "true";
+  if (refresh) markMetaSource("sincronizar");
   const bmId = searchParams.get("bmId") ?? undefined;
   const op = (await getActiveOperationId()) ?? undefined;
 

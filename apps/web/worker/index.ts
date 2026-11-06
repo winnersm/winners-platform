@@ -10,6 +10,7 @@ import { DASHBOARD_HOURLY_PRESETS, DASHBOARD_SLOW_PRESETS, syncAllDashboards } f
 import { DAILY_HISTORY_PRESETS, LISTING_PRESETS, WEEKLY_HISTORY_PRESETS, syncAllListings, syncListingsForAccount } from "@/lib/listing-sync";
 import { syncAllSpendDaily } from "@/lib/spend-history";
 import { duplicationsQueue, syncQueue, SYNC_JOB_NAMES, JOB_TYPES } from "@/lib/queue";
+import { withMetaSource } from "@/lib/meta-calls";
 
 const connection = {
   url: process.env.REDIS_URL ?? "redis://localhost:6379",
@@ -305,13 +306,13 @@ async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[], token?:
   }
 }
 
-const worker = new Worker("duplications", processJob, {
+const worker = new Worker("duplications", (job, token) => withMetaSource(job.name, () => processJob(job, token)), {
   connection,
   concurrency: WORKER_CONCURRENCY,
 });
 
 // Los syncs van aparte: 2 a la vez como máximo, sin competir con las duplicaciones.
-const syncWorker = new Worker("syncs", processSyncJob, {
+const syncWorker = new Worker("syncs", (job) => withMetaSource(job.name, () => processSyncJob(job)), {
   connection,
   concurrency: 2,
 });

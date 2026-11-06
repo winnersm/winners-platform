@@ -1,6 +1,7 @@
 import { prisma } from "@winners/db";
 import { decrypt } from "@/lib/crypto";
 import { redis } from "@/lib/redis";
+import { metaFetch } from "@/lib/meta-calls";
 import { splitExistingAds } from "@/lib/ad-dedup";
 import { MetaApiError, isRateLimitKind, serializeError, type MetaErrorDetail, type SerializedError } from "@/lib/meta-errors";
 
@@ -189,7 +190,7 @@ export async function refreshAccountsUsage(accounts: { id: string; bmId: string 
     if (!token) return;
     const rawId = acc.id.replace("act_", "");
     try {
-      const res = await fetch(`${META_API_BASE}/act_${rawId}?fields=id&access_token=${token}`);
+      const res = await metaFetch(`${META_API_BASE}/act_${rawId}?fields=id&access_token=${token}`);
       await captureUsage(res);
     } catch { /* ignorar fallos puntuales */ }
   }));
@@ -217,7 +218,7 @@ async function metaRequest(
     let res: Response;
     let json: { error?: RawMetaError } & Record<string, unknown>;
     try {
-      res = await fetch(url, init);
+      res = await metaFetch(url, init);
       json = await res.json();
     } catch (e) {
       const err = new MetaApiError({ endpoint, httpStatus: 0, attempts: attempt + 1, message: e instanceof Error ? e.message : String(e) });
@@ -292,7 +293,7 @@ async function metaBatch(token: string, requests: BatchReq[], retries = 3): Prom
     let res: Response;
     let json: { error?: RawMetaError } | Array<{ code?: number; body?: string } | null>;
     try {
-      res = await fetch(url.toString(), {
+      res = await metaFetch(url.toString(), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form.toString(),
@@ -381,7 +382,7 @@ async function createAdBracket(
   for (let attempt = 0; attempt < AD_MAX_ATTEMPTS; attempt++) {
     if (attempt > 0) console.log(`[bracket] Intento ${attempt + 1}/${AD_MAX_ATTEMPTS} | adset=${adsetId}`);
 
-    const res = await fetch(url.toString(), {
+    const res = await metaFetch(url.toString(), {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),

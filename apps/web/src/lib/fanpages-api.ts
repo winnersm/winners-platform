@@ -4,6 +4,7 @@
 // UI lee de la DB (instantáneo). FB solo se toca al sincronizar o crear PBIA.
 import { prisma } from "@winners/db";
 import { decrypt } from "@/lib/crypto";
+import { metaFetch } from "@/lib/meta-calls";
 
 const API = "https://graph.facebook.com/v21.0";
 
@@ -42,7 +43,7 @@ async function fetchPagesFromFB(operationId?: string): Promise<FanPageRaw[]> {
   let guard = 0;
 
   while (url && guard < 50) {
-    const res: Response = await fetch(url);
+    const res: Response = await metaFetch(url);
     const json: { data?: Array<Record<string, unknown>>; paging?: { next?: string }; error?: { message?: string } } = await res.json();
     if (json.error) throw new Error(json.error.message ?? "Error al listar páginas");
     for (const p of json.data ?? []) {
@@ -132,7 +133,7 @@ export async function lastSyncedAt(operationId?: string): Promise<Date | null> {
 
 // ── PBIA ─────────────────────────────────────────────────────────────────────
 async function getPageToken(pageId: string, userToken: string): Promise<string> {
-  const res = await fetch(`${API}/${pageId}?fields=access_token&access_token=${userToken}`);
+  const res = await metaFetch(`${API}/${pageId}?fields=access_token&access_token=${userToken}`);
   const json = await res.json() as { access_token?: string; error?: { message?: string } };
   if (!json.access_token) throw new Error(json.error?.message ?? "Sin acceso a la página");
   return json.access_token;
@@ -143,12 +144,12 @@ export async function createPBIA(pageId: string, operationId?: string, userToken
   const userToken = userTokenOverride ?? (await getFanpageToken(operationId));
   const pageToken = await getPageToken(pageId, userToken);
 
-  const g = await fetch(`${API}/${pageId}/page_backed_instagram_accounts?access_token=${pageToken}`);
+  const g = await metaFetch(`${API}/${pageId}/page_backed_instagram_accounts?access_token=${pageToken}`);
   const gj = await g.json() as { data?: Array<{ id: string }> };
   let igId = gj.data && gj.data.length ? gj.data[0].id : null;
 
   if (!igId) {
-    const p = await fetch(`${API}/${pageId}/page_backed_instagram_accounts?access_token=${pageToken}`, { method: "POST" });
+    const p = await metaFetch(`${API}/${pageId}/page_backed_instagram_accounts?access_token=${pageToken}`, { method: "POST" });
     const pj = await p.json() as { id?: string; error?: { message?: string; error_user_msg?: string } };
     if (!pj.id) throw new Error(pj.error?.error_user_msg ?? pj.error?.message ?? "No se pudo crear el PBIA");
     igId = pj.id;
@@ -168,7 +169,7 @@ export async function syncPBIA(pageIds: string[], operationId?: string): Promise
     const chunk = pageIds.slice(i, i + 50);
 
     // 1) page tokens (batch)
-    const tokRes = await fetch(`${API}/`, {
+    const tokRes = await metaFetch(`${API}/`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ access_token: userToken, batch: chunk.map((id) => ({ method: "GET", relative_url: `${id}?fields=access_token` })) }),
     });
@@ -181,7 +182,7 @@ export async function syncPBIA(pageIds: string[], operationId?: string): Promise
     // 2) PBIA (batch) con el page token de cada una
     const ready = chunk.filter((id) => pageTokens[id]);
     if (ready.length) {
-      const pbiaRes = await fetch(`${API}/`, {
+      const pbiaRes = await metaFetch(`${API}/`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           access_token: userToken,
@@ -217,7 +218,7 @@ export async function syncActiveAds(
   let accUrl: string | null = `${API}/me/adaccounts?fields=id&limit=200&access_token=${token}`;
   let g = 0;
   while (accUrl && g < 20) {
-    const r = await fetch(accUrl);
+    const r = await metaFetch(accUrl);
     const j = await r.json() as { data?: Array<{ id: string }>; paging?: { next?: string }; error?: { message?: string } };
     if (j.error) throw new Error(j.error.message ?? "Sin acceso a las cuentas");
     for (const a of j.data ?? []) accounts.push(a.id);
@@ -234,7 +235,7 @@ export async function syncActiveAds(
       `${API}/${accounts[i]}/ads?fields=creative{object_story_spec{page_id},effective_object_story_id}&filtering=${filtering}&limit=500&access_token=${token}`;
     let pg = 0;
     while (url && pg < 20) {
-      const r = await fetch(url);
+      const r = await metaFetch(url);
       const j = await r.json() as {
         data?: Array<{ creative?: { object_story_spec?: { page_id?: string }; effective_object_story_id?: string } }>;
         paging?: { next?: string }; error?: { message?: string };

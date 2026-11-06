@@ -89,6 +89,7 @@ const NAV_GROUPS: { label: string; module: Module; items: NavItem[] }[] = [
       { scope: "fanpages", href: "/meta/fanpages", label: "Fanpages", icon: Contact, module: "META" },
       { scope: "launches", href: "/meta/launches", label: "Lanzamientos", icon: Rocket, module: "META" },
       { scope: "jobs", href: "/meta/jobs", label: "Trabajos", icon: Briefcase, module: "META" },
+      { scope: "dashboard", href: "/meta/calls", label: "Llamadas a Meta", icon: Activity, module: "META" },
     ],
   },
   {

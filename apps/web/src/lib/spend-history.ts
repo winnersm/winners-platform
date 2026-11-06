@@ -1,6 +1,7 @@
 import { prisma } from "@winners/db";
 import { getAdAccounts, getActiveToken } from "@/lib/meta-api";
 import { getPurchaseRevenue, getPurchaseCount, type Insights } from "@/lib/metrics";
+import { metaFetch } from "@/lib/meta-calls";
 
 // Libro diario de gasto por cuenta. Se alimenta del insights de Meta con
 // time_increment=1 (una fila por día). A diferencia del dashboard (que sobrescribe
@@ -44,7 +45,7 @@ async function fetchDailySpend(
   let next: string | null = u.toString();
   let pages = 0;
   while (next && pages < 100) {
-    const res = await fetch(next);
+    const res = await metaFetch(next);
     const json = (await res.json()) as {
       data?: DailyRaw[];
       error?: { code?: number; message?: string };

@@ -5,6 +5,7 @@ import { getActiveOperationId } from "@/lib/operation";
 import { readSnapshotWithAge, saveListingSnapshot } from "@/lib/listing-sync";
 import { errorResponse } from "@/lib/api-error";
 import { serializeError, userLine } from "@/lib/meta-errors";
+import { markMetaSource } from "@/lib/meta-calls";
 
 // Métricas por nivel y periodo. Misma política que /api/meta/campaigns: copia de
 // DB si es reciente; si no, Meta en vivo; refresh=true salta los cachés.
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest) {
   const level = searchParams.get("level") as "campaign" | "adset" | "ad" | null;
   const datePreset = searchParams.get("datePreset") ?? "last_7d";
   const refresh = searchParams.get("refresh") === "true";
+  if (refresh) markMetaSource("sincronizar");
   const bmId = searchParams.get("bmId") ?? undefined;
   const op = (await getActiveOperationId()) ?? undefined;
 

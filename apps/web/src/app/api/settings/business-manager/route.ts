@@ -5,6 +5,7 @@ import { verifyToken, invalidateAccountsCache } from "@/lib/meta-api";
 import { requireActiveOperationId, getActiveOperationId } from "@/lib/operation";
 import { z } from "zod";
 import { assertGrant, ForbiddenError } from "@/lib/guards";
+import { metaFetch } from "@/lib/meta-calls";
 
 const META_API_BASE = "https://graph.facebook.com/v21.0";
 
@@ -22,7 +23,7 @@ const updateSchema = z.object({
 
 async function fetchSystemUser(token: string): Promise<{ id: string; name: string } | null> {
   try {
-    const res = await fetch(`${META_API_BASE}/me?fields=id,name&access_token=${encodeURIComponent(token)}`);
+    const res = await metaFetch(`${META_API_BASE}/me?fields=id,name&access_token=${encodeURIComponent(token)}`);
     const json = await res.json() as { id?: string; name?: string; error?: unknown };
     if (!json.id) return null;
     return { id: json.id, name: json.name ?? json.id };

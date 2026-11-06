@@ -5,6 +5,7 @@ import { redis } from "@/lib/redis";
 import { getActiveOperationId, requireActiveOperationId } from "@/lib/operation";
 import { z } from "zod";
 import { assertGrant, ForbiddenError } from "@/lib/guards";
+import { metaFetch } from "@/lib/meta-calls";
 
 const API = "https://graph.facebook.com/v21.0";
 const createSchema = z.object({ name: z.string().optional(), token: z.string().min(20) });
@@ -44,11 +45,11 @@ export async function POST(req: NextRequest) {
   const { token, name } = parsed.data;
 
   // Validar: ¿quién es y qué permisos tiene?
-  const meRes = await fetch(`${API}/me?fields=id,name&access_token=${token}`);
+  const meRes = await metaFetch(`${API}/me?fields=id,name&access_token=${token}`);
   const me = await meRes.json() as { id?: string; name?: string; error?: { message?: string } };
   if (!me.id) return NextResponse.json({ error: me.error?.message ?? "Token inválido" }, { status: 400 });
 
-  const permRes = await fetch(`${API}/me/permissions?access_token=${token}`);
+  const permRes = await metaFetch(`${API}/me/permissions?access_token=${token}`);
   const permJson = await permRes.json() as { data?: Array<{ permission: string; status: string }> };
   const granted = new Set((permJson.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission));
   const required = ["pages_show_list", "pages_read_engagement", "business_management"];

@@ -2,6 +2,7 @@
 // Adaptado del patrón de NewAppMeta (src/lib/meta-api.ts) y meta_api.py.
 import { prisma } from "@winners/db";
 import { decrypt } from "@/lib/crypto";
+import { metaFetch } from "@/lib/meta-calls";
 
 const META_API_BASE = "https://graph.facebook.com/v21.0";
 
@@ -62,7 +63,7 @@ async function graphGet(
 ): Promise<Record<string, unknown>> {
   const qs = new URLSearchParams({ ...params, access_token: token });
   const url = `${META_API_BASE}/${path}?${qs.toString()}`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await metaFetch(url, { cache: "no-store" });
   const json = (await res.json()) as Record<string, unknown> & GraphError;
 
   if (!res.ok || json.error) {

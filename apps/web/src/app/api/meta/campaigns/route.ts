@@ -6,6 +6,7 @@ import { readSnapshotWithAge } from "@/lib/listing-sync";
 import { syncQueue, JOB_TYPES } from "@/lib/queue";
 import { errorResponse } from "@/lib/api-error";
 import { serializeError, userLine } from "@/lib/meta-errors";
+import { markMetaSource } from "@/lib/meta-calls";
 
 // Campañas de una cuenta.
 //  - Normal: copia de DB (el servidor la renueva a las 5:30, 12:00 y 17:30); si es vieja, Meta en vivo.
@@ -23,6 +24,7 @@ export async function GET(req: NextRequest) {
 
   const cursor = searchParams.get("cursor") ?? undefined;
   const refresh = searchParams.get("refresh") === "true";
+  if (refresh) markMetaSource("sincronizar");
   const bmId = searchParams.get("bmId") ?? undefined;
   const op = (await getActiveOperationId()) ?? undefined;
 

@@ -153,6 +153,7 @@ export const ROUTE_SCOPES: { path: string; module: Module; scope?: string }[] = 
   { path: "/meta/fanpages", module: "META", scope: "fanpages" },
   { path: "/meta/launches", module: "META", scope: "launches" },
   { path: "/meta/jobs", module: "META", scope: "jobs" },
+  { path: "/meta/calls", module: "META", scope: "dashboard" },
   { path: "/automations", module: "AUTOMATIONS" },
   { path: "/links", module: "LINKS" },
   { path: "/monitor", module: "MONITOR" },
