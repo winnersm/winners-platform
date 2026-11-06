@@ -183,6 +183,7 @@ export default function DashboardView() {
   const [showCalendar, setShowCalendar] = useState(false);
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [oldestSyncedAt, setOldestSyncedAt] = useState<string | null>(null);
   const [live, setLive] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -245,7 +246,7 @@ export default function DashboardView() {
         // Totales y tabla incluyen TODAS las cuentas vivas del BM (activas y
         // pausadas): lo que se suma es exactamente lo que se ve.
         setTotal(accs.length); setDone(accs.length);
-        setSyncedAt(snap.syncedAt ?? null); setLive(false); setLoading(false);
+        setSyncedAt(snap.syncedAt ?? null); setOldestSyncedAt(snap.oldestSyncedAt ?? null); setLive(false); setLoading(false);
         return;
       }
     } catch {}
@@ -257,15 +258,22 @@ export default function DashboardView() {
   useEffect(() => { run(); }, [run]);
 
   // Sincronización REAL contra Meta a demanda: lo mismo que hace el job de
-  // fondo cada 20 min, pero sin esperarlo. Al terminar recarga la vista.
+  // fondo (hoy cada hora, 7/30 días cada 6 h), pero sin esperarlo, y solo del
+  // periodo en pantalla. Al terminar recarga la vista.
   const syncWithMeta = useCallback(async () => {
     setSyncing(true);
     try {
-      const res = await fetch("/api/dashboard/sync", { method: "POST" });
+      const res = await fetch("/api/dashboard/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ datePreset }),
+      });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "No se pudo sincronizar"); return; }
       if ((json.accounts ?? 0) === 0) {
         toast("Meta no devolvió cuentas para esta operación");
+      } else if (json.failed) {
+        toast.warning(`${json.failed} lecturas de Meta fallaron: esas cuentas conservan su dato anterior`);
       } else {
         toast.success(`Sincronizadas ${json.accounts} cuentas${json.archived ? ` · ${json.archived} archivadas` : ""}`);
       }
@@ -275,7 +283,7 @@ export default function DashboardView() {
     } finally {
       setSyncing(false);
     }
-  }, [run]);
+  }, [datePreset, run]);
 
   // Totales agregados POR MONEDA (suma de crudos → recalcular derivados).
   const totsByC = new Map<string, { spend: number; revenue: number; sales: number; ic: number }>();
@@ -349,7 +357,7 @@ export default function DashboardView() {
           {!loading && !showArchived && (
             live
               ? <span className="text-[11px] text-amber-600" title="Datos en vivo desde Meta (preset sin snapshot)">· en vivo</span>
-              : syncedAt && <span className="text-[11px] text-muted-foreground/70">· actualizado {agoLabel(syncedAt)}</span>
+              : syncedAt && <span className="text-[11px] text-muted-foreground/70" title={`Última lectura directa de Meta${oldestSyncedAt && agoLabel(oldestSyncedAt) !== agoLabel(syncedAt) ? ` · la cuenta más atrasada: ${agoLabel(oldestSyncedAt)}` : ""}`}>· actualizado {agoLabel(syncedAt)}</span>
           )}
         </div>
         <div className="flex items-center gap-2">

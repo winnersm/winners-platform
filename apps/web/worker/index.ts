@@ -6,7 +6,7 @@ import { prisma, Prisma } from "@winners/db";
 import { duplicateCampaign, duplicateAdsets, duplicateAds, getAccountCooldown, setAccountCooldown, FatalAdError } from "@/lib/meta-api";
 import { MetaApiError, isRateLimitKind, serializeError, userLine } from "@/lib/meta-errors";
 import { createPBIA, syncActiveAds, syncAllFanpages } from "@/lib/fanpages-api";
-import { syncAllDashboards } from "@/lib/dashboard-sync";
+import { DASHBOARD_HOURLY_PRESETS, DASHBOARD_SLOW_PRESETS, syncAllDashboards } from "@/lib/dashboard-sync";
 import { syncAllListings, syncListingsForAccount } from "@/lib/listing-sync";
 import { syncAllSpendDaily } from "@/lib/spend-history";
 import { duplicationsQueue, syncQueue, SYNC_JOB_NAMES, JOB_TYPES } from "@/lib/queue";
@@ -77,7 +77,7 @@ async function processSyncJob(bullJob: BullJob) {
   switch (bullJob.name) {
     case JOB_TYPES.SYNC_DASHBOARD:
       console.log("[worker] SYNC_DASHBOARD: sincronizando dashboards de todas las operaciones...");
-      return syncAllDashboards();
+      return syncAllDashboards((bullJob.data as { presets?: string[] } | undefined)?.presets);
     case JOB_TYPES.SYNC_LISTINGS:
       console.log("[worker] SYNC_LISTINGS: sincronizando listados de todas las operaciones...");
       return syncAllListings((bullJob.data as { scope?: "light" | "deep" } | undefined)?.scope ?? "light");
@@ -335,7 +335,9 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     }
     const opts = { removeOnComplete: true, removeOnFail: true };
     // Los schedulers con `every` ya lanzan una pasada inmediata al crearse/actualizarse.
-    await syncQueue.upsertJobScheduler("sync-dashboard", { every: 20 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, opts });
+    // Rendimiento: «hoy» cada hora; 7 y 30 días cada 6 h. Cada pasada lee directo de Meta.
+    await syncQueue.upsertJobScheduler("sync-dashboard", { every: 60 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, data: { presets: DASHBOARD_HOURLY_PRESETS }, opts });
+    await syncQueue.upsertJobScheduler("sync-dashboard-slow", { every: 6 * 60 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, data: { presets: DASHBOARD_SLOW_PRESETS }, opts });
     // Listados ligeros (campañas + métricas de campaña): cada 30 min.
     await syncQueue.upsertJobScheduler("sync-listings", { every: 30 * 60 * 1000 }, { name: JOB_TYPES.SYNC_LISTINGS, data: { scope: "light" }, opts });
     // Ad sets y anuncios (+ sus métricas): ~300 llamadas que casi nadie abre → cada 6 h.
@@ -345,7 +347,7 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     await syncQueue.upsertJobScheduler("sync-fanpages", { pattern: "0 5 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_FANPAGES, opts });
     // Gasto diario: 6:00 AM (hora Colombia). Reescribe los últimos días para captar ajustes tardíos de Meta.
     await syncQueue.upsertJobScheduler("sync-spend-daily", { pattern: "0 6 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_SPEND_DAILY, opts });
-    console.log("[worker] Sync programado: dashboard (20 min) + campañas (30 min) + ad sets/anuncios (6 h) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
+    console.log("[worker] Sync programado: rendimiento (hoy 1 h, 7/30 días 6 h) + campañas (30 min) + ad sets/anuncios (6 h) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
   } catch (e) {
     console.error("[worker] No se pudo programar los syncs:", e);
   }

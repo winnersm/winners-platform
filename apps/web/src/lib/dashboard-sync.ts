@@ -6,18 +6,24 @@ import { getAdAccounts, getAccountInsights, type MetaInsights } from "@/lib/meta
 // siguen sirviéndose en vivo (con caché/stale/coalescing).
 export const DASHBOARD_PRESETS = ["today", "last_7d", "last_30d"];
 
+// Ritmo del job: «hoy» cada hora; los periodos largos cambian poco, cada 6 h.
+export const DASHBOARD_HOURLY_PRESETS = ["today"];
+export const DASHBOARD_SLOW_PRESETS = ["last_7d", "last_30d"];
+
 // Sincroniza los insights a nivel cuenta de UNA operación → tabla snapshot.
-// Reusa getAccountInsights (caché/coalescing/stale) y va paceado por cuenta.
+// Lee siempre directo de Meta (el ritmo lo marca quien llama, no el caché) y va
+// paceado por cuenta. syncedAt es la hora en que llegó ese dato de Meta: si la
+// lectura falla, la fila conserva su dato y su hora.
 export async function syncDashboardForOperation(
   operationId: string,
   presets: string[] = DASHBOARD_PRESETS,
   forceRefresh?: boolean,
-): Promise<{ accounts: number; snapshots: number; archived: number }> {
+): Promise<{ accounts: number; snapshots: number; failed: number; archived: number }> {
   let accounts;
   try {
     accounts = await getAdAccounts(undefined, operationId, forceRefresh);
   } catch {
-    return { accounts: 0, snapshots: 0, archived: 0 };
+    return { accounts: 0, snapshots: 0, failed: 0, archived: 0 };
   }
 
   // Membresía viva del BM: todos los accountId que el BM devuelve ahora (de
@@ -25,6 +31,7 @@ export async function syncDashboardForOperation(
   const currentIds = new Set(accounts.map((a) => a.id.replace("act_", "")));
   const now = new Date();
   let snaps = 0;
+  let failed = 0;
 
   // Se piden insights de TODAS las cuentas del BM, no solo de las activas. Si
   // solo se pidieran las activas, al desactivarse una cuenta su última foto
@@ -36,8 +43,9 @@ export async function syncDashboardForOperation(
     for (const preset of presets) {
       let insights: MetaInsights | null = null;
       try {
-        insights = await getAccountInsights(rawId, preset, a.bmId, operationId);
+        insights = await getAccountInsights(rawId, preset, a.bmId, operationId, { force: true });
       } catch {
+        failed++;
         continue; // conservar el snapshot anterior si falla (rate limit, permiso, etc.)
       }
       await prisma.accountInsightSnapshot.upsert({
@@ -95,16 +103,16 @@ export async function syncDashboardForOperation(
     archived = res.count;
   }
 
-  return { accounts: accounts.length, snapshots: snaps, archived };
+  return { accounts: accounts.length, snapshots: snaps, failed, archived };
 }
 
 // Sincroniza TODAS las operaciones (lo llama el job en segundo plano).
-export async function syncAllDashboards(): Promise<void> {
+export async function syncAllDashboards(presets: string[] = DASHBOARD_PRESETS): Promise<void> {
   const ops = await prisma.operation.findMany({ select: { id: true, name: true } });
   for (const op of ops) {
     try {
-      const r = await syncDashboardForOperation(op.id);
-      console.log(`[dashboard-sync] ${op.name}: ${r.accounts} cuentas, ${r.snapshots} snapshots, ${r.archived} archivadas`);
+      const r = await syncDashboardForOperation(op.id, presets);
+      console.log(`[dashboard-sync] ${op.name} (${presets.join(", ")}): ${r.accounts} cuentas, ${r.snapshots} snapshots, ${r.failed} fallidas, ${r.archived} archivadas`);
     } catch (e) {
       console.error(`[dashboard-sync] ${op.name} falló:`, e);
     }

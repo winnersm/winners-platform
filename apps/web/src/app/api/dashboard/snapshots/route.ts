@@ -35,10 +35,16 @@ export async function GET(req: NextRequest) {
     lastSeenInBmAt: r.lastSeenInBmAt,
   }));
 
+  // syncedAt: última lectura directa de Meta. oldestSyncedAt: la cuenta más
+  // atrasada, para no dar por al día las que fallaron en la última pasada.
   const syncedAt = rows.reduce<Date | null>(
     (max, r) => (max && max > r.syncedAt ? max : r.syncedAt),
     null
   );
+  const oldestSyncedAt = rows.reduce<Date | null>(
+    (min, r) => (min && min < r.syncedAt ? min : r.syncedAt),
+    null
+  );
 
-  return NextResponse.json({ accounts, synced: rows.length > 0, syncedAt });
+  return NextResponse.json({ accounts, synced: rows.length > 0, syncedAt, oldestSyncedAt });
 }

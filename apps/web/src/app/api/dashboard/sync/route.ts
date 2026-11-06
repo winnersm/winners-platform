@@ -1,16 +1,17 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getActiveOperationId } from "@/lib/operation";
 import { getAdAccounts } from "@/lib/meta-api";
-import { syncDashboardForOperation } from "@/lib/dashboard-sync";
+import { DASHBOARD_PRESETS, syncDashboardForOperation } from "@/lib/dashboard-sync";
 
 // Sincronización REAL contra Meta de la operación activa (la que dispara el
-// botón "Sincronizar con Meta"). El job de fondo hace lo mismo cada 20 min;
-// esto es para no tener que esperarlo.
+// botón "Sincronizar con Meta"). El job de fondo hace lo mismo (hoy cada hora,
+// 7/30 días cada 6 h); esto es para no tener que esperarlo.
 //
 // Es una operación lenta (una llamada por cuenta y preset, con pacing), así que
-// la UI muestra estado mientras corre.
-export async function POST() {
+// solo se pide el periodo que se está viendo; si ese periodo no tiene snapshot,
+// se refrescan todos. La UI muestra estado mientras corre.
+export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
@@ -30,6 +31,9 @@ export async function POST() {
     );
   }
 
-  const r = await syncDashboardForOperation(op, undefined, true);
+  const body = (await req.json().catch(() => null)) as { datePreset?: string } | null;
+  const preset = body?.datePreset;
+  const presets = preset && DASHBOARD_PRESETS.includes(preset) ? [preset] : undefined;
+  const r = await syncDashboardForOperation(op, presets, true);
   return NextResponse.json(r);
 }

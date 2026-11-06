@@ -16,7 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ErrorDetails, errorInfoOf, type ErrorInfo } from "@/components/error-details";
 import { DUPLICATE_LIMITS } from "@/lib/duplicate-limits";
-import { buildCopyTemplate, renderCopyName } from "@/lib/copy-name";
+import { buildCopyTemplate, hasNumberToken, renderCopyName } from "@/lib/copy-name";
 
 interface Campaign {
   id: string; name: string; status: string; is_cbo: boolean;
@@ -45,7 +45,7 @@ function formatBudget(cents: string | undefined, currency = "USD") {
 export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, onClose, onSuccess }: Props) {
   const single = campaigns.length === 1 ? campaigns[0] : null;
 
-  const [template, setTemplate] = useState("[Copia] {nombre}");
+  const [template, setTemplate] = useState("[Copia] {nombre} {numero}");
   const [numbered, setNumbered] = useState(true);
   const [startRaw, setStartRaw] = useState("1");
   const [status, setStatus] = useState<"ACTIVE" | "PAUSED">("PAUSED");
@@ -71,7 +71,22 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
   const previewNumbers = validCount > 3
     ? [startAt, startAt + 1, null, startAt + validCount - 1]
     : Array.from({ length: validCount }, (_, i) => startAt + i);
-  const addToken = (token: string) => setTemplate(t => `${t.trimEnd()} ${token}`);
+  const addToken = (token: string) => {
+    setTemplate(t => `${t.trimEnd()} ${token}`);
+    if (token === "{numero}") setNumbered(true);
+  };
+  // «Numerar» y {numero} van de la mano: al marcar la serie se escribe {numero} en el nombre
+  // (si falta) y al desmarcarla se quita; escribir {numero} a mano también marca la serie.
+  const toggleNumbered = (on: boolean) => {
+    setNumbered(on);
+    setTemplate(t => on
+      ? (hasNumberToken(t) ? t : `${t.trimEnd()} {numero}`)
+      : t.replace(/\{n[uú]mero\}/gi, "").replace(/\s{2,}/g, " ").trim());
+  };
+  const changeTemplate = (v: string) => {
+    setTemplate(v);
+    if (hasNumberToken(v) && !numbered) setNumbered(true);
+  };
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -152,7 +167,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
         <form onSubmit={submit} className="space-y-4 mt-2">
           <div className="space-y-1.5">
             <Label htmlFor="dup-name">Nombre de las copias</Label>
-            <Input id="dup-name" value={template} onChange={(e) => setTemplate(e.target.value)} />
+            <Input id="dup-name" value={template} onChange={(e) => changeTemplate(e.target.value)} />
             <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-muted-foreground">
               <span>Insertar:</span>
               <button type="button" className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono hover:bg-muted" onClick={() => addToken("{nombre}")}>{"{nombre}"}</button>
@@ -164,7 +179,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
 
           <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
             <label className="flex items-center gap-2 text-sm cursor-pointer whitespace-nowrap">
-              <input type="checkbox" checked={numbered} onChange={(e) => setNumbered(e.target.checked)} className="h-3.5 w-3.5" />
+              <input type="checkbox" checked={numbered} onChange={(e) => toggleNumbered(e.target.checked)} className="h-3.5 w-3.5" />
               Numerar en orden ascendente
             </label>
             {numbered && (

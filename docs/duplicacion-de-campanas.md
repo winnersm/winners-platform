@@ -85,26 +85,9 @@ Un trabajo cancelado se detecta entre fases con `checkCancelled`, que lee el est
 
 ## 4. Fases de `duplicateCampaign`
 
-### Fase 1: crear la copia (en pausa)
+### Fase 1: leer la configuración de los ad sets originales (antes de crear nada)
 
-```
-POST https://graph.facebook.com/v21.0/{campaignId}/copies
-Content-Type: application/x-www-form-urlencoded
-
-access_token=...&name=Campa%C3%B1a+Verano+1&status_option=PAUSED
-```
-
-Respuesta de Meta:
-
-```json
-{
-  "copied_campaign_id": "120210000000000099"
-}
-```
-
-El id se guarda en `MetaJob.output.newCampaignId` como punto de control (`onCheckpoint`). Si el trabajo se interrumpe después de este punto, la reanudación continúa sobre esa campaña sin crear otra.
-
-### Fase 2: leer la configuración de los ad sets originales
+Esta fase va primero: si el origen no tiene ad sets, o ninguno tiene anuncios activos o pausados con creativo, el trabajo falla aquí con un mensaje explicado y no se crea ninguna campaña en Meta.
 
 Primero se listan los ad sets de la campaña origen:
 
@@ -185,6 +168,25 @@ Resultado de la lectura (forma que se guarda en Redis):
   "issues": []
 }
 ```
+
+### Fase 2: crear la copia (en pausa)
+
+```
+POST https://graph.facebook.com/v21.0/{campaignId}/copies
+Content-Type: application/x-www-form-urlencoded
+
+access_token=...&name=Campa%C3%B1a+Verano+1&status_option=PAUSED
+```
+
+Respuesta de Meta:
+
+```json
+{
+  "copied_campaign_id": "120210000000000099"
+}
+```
+
+El id se guarda en `MetaJob.output.newCampaignId` como punto de control (`onCheckpoint`). Si el trabajo se interrumpe después de este punto, la reanudación continúa sobre esa campaña sin crear otra.
 
 ### Fase 3: crear los ad sets en la copia
 
@@ -316,7 +318,7 @@ Cuando algo no salió, se agrega `issues`:
 
 ## 5. Lectura guardada de la campaña origen
 
-La configuración de la campaña origen (resultado de la fase 2) se guarda en Redis en `meta:dup-source:<campaignId>` con una caducidad de 1800 segundos (30 minutos). `readCampaignSource` hace:
+La configuración de la campaña origen (resultado de la fase 1) se guarda en Redis en `meta:dup-source:<campaignId>` con una caducidad de 1800 segundos (30 minutos). `readCampaignSource` hace:
 
 1. Busca la clave. Si existe, la devuelve sin llamar a Meta.
 2. Si no existe, hace el `GET {campaignId}/adsets` y los batch GET de los ad sets, y guarda el resultado con `SETEX` (30 minutos).
@@ -325,12 +327,12 @@ Redis elimina la clave solo al cumplirse la caducidad; no hay ninguna lectura pr
 
 La ruta de duplicación borra la clave de cada campaña origen al crear la tanda. Por eso:
 
-- La primera copia de una tanda que llega a la fase 2 lee de Meta y guarda la lectura.
+- La primera copia de una tanda que llega a la fase 1 lee de Meta y guarda la lectura.
 - Las demás copias de esa tanda, que corren hasta 5 a la vez, encuentran la clave y la reutilizan.
 - Una tanda nueva vuelve a empezar leyendo de Meta, aunque la anterior haya sido hace pocos minutos.
 - Los reintentos y reanudaciones de un trabajo de la tanda usan la lectura guardada mientras no hayan pasado los 30 minutos.
 
-Si varias copias llegan a la fase 2 a la vez antes de que la primera guarde la lectura, cada una puede leer de Meta por su cuenta. No hay candado.
+Si varias copias llegan a la fase 1 a la vez antes de que la primera guarde la lectura, cada una puede leer de Meta por su cuenta. No hay candado.
 
 ## 6. Cuota y enfriamiento por cuenta
 

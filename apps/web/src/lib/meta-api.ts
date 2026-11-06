@@ -903,19 +903,22 @@ export async function getInsights(
 }
 
 // Insights a NIVEL CUENTA (totales), para el dashboard de rendimiento. Cacheado.
+// force: lectura directa de Meta. Ni caché ni copia de respaldo: si Meta falla,
+// lanza el error, para que nadie anote como reciente un dato que no lo es.
 export async function getAccountInsights(
   accountId: string,
   datePreset = "last_7d",
   bmId?: string,
-  operationId?: string
+  operationId?: string,
+  opts: FetchOpts = {}
 ): Promise<MetaInsights | null> {
   const cacheKey = `meta:acctins:${operationId ?? "all"}:${accountId}:${datePreset}`;
   const staleKey = `${cacheKey}:stale`;
-  const cached = await redis.get(cacheKey);
+  const cached = opts.force ? null : await redis.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
-  return coalesce(cacheKey, async () => {
-    const again = await redis.get(cacheKey);
+  return coalesce(`${cacheKey}${opts.force ? ":force" : ""}`, async () => {
+    const again = opts.force ? null : await redis.get(cacheKey);
     if (again) return JSON.parse(again);
 
     try {
@@ -957,7 +960,7 @@ export async function getAccountInsights(
       await redis.setex(staleKey, STALE_TTL, JSON.stringify(row));
       return row;
     } catch (e) {
-      if (isRateLimit(e)) {
+      if (!opts.force && isRateLimit(e)) {
         const s = await redis.get(staleKey);
         if (s) return JSON.parse(s);
       }
@@ -1204,10 +1207,12 @@ async function readCampaignSource(campaignId: string, token: string): Promise<Ca
 
   const adsetsJson = await metaGet(`${campaignId}/adsets`, token, { fields: "id", limit: "200" }, 1);
   const ids: string[] = (adsetsJson.data ?? []).map((a: { id: string }) => a.id);
-  if (ids.length === 0) throw new Error("La campaña original no tiene ad sets: no hay nada que copiar");
+  if (ids.length === 0) throw new Error(`La campaña original (${campaignId}) no tiene ad sets: no hay nada que copiar. No se creó ninguna copia.`);
   const issues: DuplicateIssue[] = [];
   const specs = await fetchAdsetSpecs(ids, token, issues);
-  if (specs.length === 0) throw new Error("No se pudo leer la configuración de ningún ad set de la campaña original");
+  if (specs.length === 0) {
+    throw new Error(`Ningún ad set de la campaña original (${campaignId}) tiene anuncios activos o pausados con creativo, o no se pudieron leer: no hay nada que copiar. No se creó ninguna copia.`);
+  }
   const source = { adsetCount: ids.length, specs, issues };
   await redis.setex(key, SOURCE_TTL, JSON.stringify(source)).catch(() => {});
   return source;
@@ -1235,7 +1240,22 @@ export async function duplicateCampaign(
   const { token } = await getActiveToken(bmId, opts.operationId);
   const issues: DuplicateIssue[] = [];
 
-  // Fase 1: la copia. Se crea PAUSADA y solo se activa al final si se pidió:
+  // Fase 1: leer la configuración del origen ANTES de crear nada. Si el origen no tiene
+  // ad sets ni anuncios que copiar, el trabajo falla aquí y no deja una campaña vacía en Meta.
+  await cb(3, "Leyendo ad sets originales...");
+  const source = await readCampaignSource(campaignId, token);
+  const { specs } = source;
+  issues.push(...source.issues);
+  if (specs.length < source.adsetCount) {
+    issues.push({
+      step: "adset", name: `${source.adsetCount - specs.length} ad set(s) sin anuncio o ilegibles`,
+      error: serializeError(new Error("Se omitieron porque no tienen un anuncio con creativo que reutilizar")),
+    });
+  }
+  console.log(`[duplicate] Config lista de ${specs.length}/${source.adsetCount} adsets`);
+  if (checkCancelled) await checkCancelled();
+
+  // Fase 2: la copia. Se crea PAUSADA y solo se activa al final si se pidió:
   // si el job muere a mitad, no queda una campaña gastando a medio montar.
   let newCampaignId = opts.resumeCampaignId;
   let resumed = false;
@@ -1259,20 +1279,6 @@ export async function duplicateCampaign(
     console.log(`[duplicate] Campaña copiada | newCampaignId=${newCampaignId}`);
     await cb(10, `Campaña copiada → ${newCampaignId}`);
   }
-
-  // Fase 2: Leer config completa de los adsets originales (+ creative por adset) — FROM SCRATCH.
-  await cb(15, "Leyendo adsets originales...");
-  const source = await readCampaignSource(campaignId, token);
-  const { specs } = source;
-  issues.push(...source.issues);
-  if (specs.length < source.adsetCount) {
-    issues.push({
-      step: "adset", name: `${source.adsetCount - specs.length} ad set(s) sin anuncio o ilegibles`,
-      error: serializeError(new Error("Se omitieron porque no tienen un anuncio con creativo que reutilizar")),
-    });
-  }
-  console.log(`[duplicate] Config lista de ${specs.length}/${source.adsetCount} adsets`);
-  if (checkCancelled) await checkCancelled();
 
   // Al reanudar, los ad sets que ya existen en la copia (mismo nombre) no se recrean.
   let work = specs.map((s) => ({ spec: s, name: s.adsetName }));
