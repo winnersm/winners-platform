@@ -8,10 +8,10 @@ import { errorResponse } from "@/lib/api-error";
 import { serializeError, userLine } from "@/lib/meta-errors";
 
 // Campañas de una cuenta.
-//  - Normal: copia de DB si es reciente (<45 min); si es vieja, Meta en vivo.
+//  - Normal: copia de DB (el servidor la renueva a las 5:30, 12:00 y 17:30); si es vieja, Meta en vivo.
 //  - refresh=true («Sincronizar con Meta»): Meta en vivo saltando cachés + re-sync de
-//    campañas y sus métricas en segundo plano. Ad sets y anuncios no se tocan aquí:
-//    se sincronizan cada 6 h o desde su propia pestaña.
+//    campañas, ad sets y sus métricas en segundo plano. Los anuncios no se tocan aquí:
+//    van en las pasadas programadas o desde su propia pestaña.
 // Si Meta falla y hay copia, se sirve la copia marcada como desactualizada.
 export async function GET(req: NextRequest) {
   const session = await auth();

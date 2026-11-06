@@ -52,6 +52,9 @@ type EntityStatus = "ACTIVE" | "PAUSED";
 
 /** Cómo llegaron los datos: copia de DB, Meta en vivo, o caché por límite de Meta. */
 interface Freshness { syncedAt: string | null; source: string | null }
+const NO_FRESHNESS: Freshness = { syncedAt: null, source: null };
+/** Frescura y aviso de copia de respaldo de la última carga de un nivel. */
+interface DataMeta extends Freshness { stale: boolean; staleInfo: ErrorInfo | null }
 
 // ─── Client-side cache ────────────────────────────────────────────────────────
 const CLIENT_TTL = 5 * 60 * 1000;
@@ -66,6 +69,7 @@ const DATE_PRESETS = [
   { value: "today", label: "Hoy" },
   { value: "yesterday", label: "Ayer" },
   { value: "last_7d", label: "7 días" },
+  { value: "last_14d", label: "14 días" },
   { value: "last_30d", label: "30 días" },
   { value: "last_month", label: "Mes ant." },
 ];
@@ -123,9 +127,19 @@ function ago(iso: string | null, now: number): string {
   if (s < 45) return "justo ahora";
   const m = Math.round(s / 60);
   if (m < 60) return `hace ${m} min`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `hace ${h} h`;
-  return `hace ${Math.round(h / 24)} días`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `hace ${h} h ${m % 60} min` : `hace ${h} h`;
+  const d = Math.floor(h / 24);
+  const days = `hace ${d} ${d === 1 ? "día" : "días"}`;
+  return h % 24 ? `${days} ${h % 24} h` : days;
+}
+
+/** Cada cuánto renueva el servidor las métricas de un periodo (hora Colombia). */
+function syncPlan(datePreset: string): { everyMin: number; label: string } {
+  if (datePreset === "today") return { everyMin: 12 * 60, label: "se actualiza a las 5:30, 12:00 y 17:30" };
+  if (datePreset === "last_30d") return { everyMin: 7 * 24 * 60, label: "se actualiza cada 7 días" };
+  if (datePreset === "last_month") return { everyMin: 24 * 60, label: "se consulta a Meta al abrirlo" };
+  return { everyMin: 24 * 60, label: "se actualiza cada día a las 5:00" };
 }
 
 function adsManagerUrl(level: Level, accountId: string, id: string): string {
@@ -465,12 +479,14 @@ function SelectionBar({
 
 /**
  * Indicador de frescura con «latido» + botón «Sincronizar con Meta».
- * `everyMin` = cada cuánto sincroniza el servidor este nivel (30 min campañas, 360 min ad sets/anuncios).
+ * Dice cuánto hace de la última lectura y cada cuánto se renueva el periodo elegido.
  * El latido es verde mientras la copia es reciente, ámbar al pasar de 1× el intervalo y rojo al pasar de 2×.
+ * Pasados 15 min desde la última lectura, el botón salta para invitar a pedir datos frescos.
  */
-function FreshnessBar({ freshness, now, loading, onRefresh, everyMin = 30 }: {
-  freshness: Freshness; now: number; loading: boolean; onRefresh: () => void; everyMin?: number;
+function FreshnessBar({ freshness, now, loading, onRefresh, datePreset }: {
+  freshness: Freshness; now: number; loading: boolean; onRefresh: () => void; datePreset: string;
 }) {
+  const { everyMin, label: plan } = syncPlan(datePreset);
   const label = freshness.source === "meta" ? "de Meta" : freshness.source === "cache" ? "en caché" : "copia guardada";
   const ageMin = freshness.syncedAt ? (now - new Date(freshness.syncedAt).getTime()) / 60_000 : 0;
   const state = ageMin > everyMin * 2 ? "bad" : ageMin > everyMin * 1.2 ? "warn" : "ok";
@@ -479,16 +495,16 @@ function FreshnessBar({ freshness, now, loading, onRefresh, everyMin = 30 }: {
   return (
     <div className="flex items-center gap-2">
       {freshness.syncedAt && (
-        <span className={`inline-flex items-center gap-1.5 text-[11px] ${text}`} title={new Date(freshness.syncedAt).toLocaleString("es-CO")}>
+        <span className={`inline-flex items-center gap-1.5 text-[11px] ${text}`} title={`${new Date(freshness.syncedAt).toLocaleString("es-CO")} · ${label}`}>
           <span className="relative flex h-2 w-2" aria-hidden>
             <span className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${loading ? "bg-primary" : dot}`} style={{ animationDuration: state === "ok" ? "2.4s" : "1.2s" }} />
             <span className={`relative inline-flex h-2 w-2 rounded-full ${loading ? "bg-primary" : dot}`} />
           </span>
-          Actualizado {ago(freshness.syncedAt, now)} · {label}
+          Actualizado {ago(freshness.syncedAt, now)} · {plan}
         </span>
       )}
-      <Button variant="outline" size="sm" className="h-7 px-2 text-xs bg-card" onClick={onRefresh} disabled={loading}
-        title="Pide los datos a Meta ahora, sin usar copias guardadas. El servidor los actualiza solo cada 30 min (campañas) o 6 h (ad sets y anuncios).">
+      <Button variant="outline" size="sm" className={`h-7 px-2 text-xs bg-card ${ageMin > 15 && !loading ? "motion-safe:animate-bounce" : ""}`} onClick={onRefresh} disabled={loading}
+        title="Pide los datos a Meta ahora, sin usar copias guardadas.">
         {loading ? <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5 mr-1" />}
         Sincronizar con Meta
       </Button>
@@ -639,10 +655,15 @@ function ManagerInner() {
   const [loadingStatus, setLoadingStatus] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [error, setError] = useState<ErrorInfo | null>(null);
-  const [staleInfo, setStaleInfo] = useState<ErrorInfo | null>(null);
-  const [stale, setStale] = useState(false);
-  const [dataFresh, setDataFresh] = useState<Freshness>({ syncedAt: null, source: null });
-  const [insFresh, setInsFresh] = useState<Freshness>({ syncedAt: null, source: null });
+  // Por nivel: cada uno sincroniza a su ritmo, y al volver a un nivel desde la caché del
+  // cliente no hay petición que refresque estos datos.
+  const [dataMetaBy, setDataMetaBy] = useState<Partial<Record<Level, DataMeta>>>({});
+  const [insFreshBy, setInsFreshBy] = useState<Partial<Record<Level, Freshness>>>({});
+  const dataMeta = dataMetaBy[level];
+  const dataFresh = dataMeta ?? NO_FRESHNESS;
+  const insFresh = insFreshBy[level] ?? NO_FRESHNESS;
+  const stale = dataMeta?.stale ?? false;
+  const staleInfo = dataMeta?.staleInfo ?? null;
   const [now, setNow] = useState(() => Date.now());
 
   const [statusFilter, setStatusFilter] = useState("ACTIVE");
@@ -667,10 +688,16 @@ function ManagerInner() {
   }, []);
 
   /** Lee del JSON la frescura, el aviso de copia desactualizada y lo deja en estado. */
-  const applyMeta = useCallback((json: { syncedAt?: string; source?: string; stale?: boolean; errorInfo?: ErrorInfo; staleReason?: string }) => {
-    setDataFresh({ syncedAt: json.syncedAt ?? null, source: json.source ?? null });
-    setStale(!!json.stale);
-    setStaleInfo(json.stale ? (json.errorInfo ?? { title: json.staleReason ?? "Mostrando datos guardados" }) : null);
+  const applyMeta = useCallback((lvl: Level, json: { syncedAt?: string; source?: string; stale?: boolean; errorInfo?: ErrorInfo; staleReason?: string }) => {
+    setDataMetaBy(p => ({
+      ...p,
+      [lvl]: {
+        syncedAt: json.syncedAt ?? null,
+        source: json.source ?? null,
+        stale: !!json.stale,
+        staleInfo: json.stale ? (json.errorInfo ?? { title: json.staleReason ?? "Mostrando datos guardados" }) : null,
+      },
+    }));
   }, []);
 
   // ── Loaders ───────────────────────────────────────────────────────────────
@@ -687,7 +714,7 @@ function ManagerInner() {
       const res = await fetch(`/api/meta/campaigns?${p}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar campañas" }); return; }
-      applyMeta(json);
+      applyMeta("campaign", json);
       setCampaigns(prev => cursor ? [...prev, ...json.campaigns] : json.campaigns);
       setNextCursor(json.nextCursor);
       if (!cursor) campSnap.current = { data: { list: json.campaigns, cur: json.nextCursor }, key: accountId, ts: Date.now() };
@@ -709,7 +736,7 @@ function ManagerInner() {
       const res = await fetch(`/api/meta/adsets?${p}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar ad sets" }); return; }
-      applyMeta(json);
+      applyMeta("adset", json);
       setAdsets(json.adsets);
       adsetSnap.current = { data: json.adsets, key: `adsets:${accountId}:${campaignId || "all"}`, ts: Date.now() };
     } catch {
@@ -730,7 +757,7 @@ function ManagerInner() {
       const res = await fetch(`/api/meta/ads?${p}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar anuncios" }); return; }
-      applyMeta(json);
+      applyMeta("ad", json);
       setAds(json.ads);
       adSnap.current = { data: json.ads, key: `ads:${accountId}:${adsetId || "all"}`, ts: Date.now() };
     } catch {
@@ -753,7 +780,7 @@ function ManagerInner() {
         toastApiError(json, `No se pudieron cargar las métricas (${lvl})`);
         return;
       }
-      setInsFresh({ syncedAt: json.syncedAt ?? null, source: json.source ?? null });
+      setInsFreshBy(p => ({ ...p, [lvl]: { syncedAt: json.syncedAt ?? null, source: json.source ?? null } }));
       if (json.stale) toastApiError({ errorInfo: json.errorInfo, error: json.staleReason }, "Métricas desactualizadas");
       const idField = lvl === "campaign" ? "campaign_id" : lvl === "adset" ? "adset_id" : "ad_id";
       const map: Record<string, Insights> = {};
@@ -1093,7 +1120,7 @@ function ManagerInner() {
               {DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}
             </SelectContent>
           </Select>
-          <FreshnessBar freshness={freshness} now={now} loading={loadingData || loadingInsights} onRefresh={refreshFromMeta} everyMin={level === "campaign" ? 30 : 360} />
+          <FreshnessBar freshness={freshness} now={now} loading={loadingData || loadingInsights} onRefresh={refreshFromMeta} datePreset={datePreset} />
         </div>
       </div>
 
@@ -1542,7 +1569,7 @@ function GlobalCampaignsView() {
           </Select>
           <FreshnessBar
             freshness={{ syncedAt: oldest, source: refreshing ? "meta" : "db" }}
-            now={now} loading={loading} onRefresh={() => run(true)}
+            now={now} loading={loading} onRefresh={() => run(true)} datePreset={datePreset}
           />
         </div>
       </div>
