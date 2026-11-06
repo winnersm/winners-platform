@@ -9,7 +9,7 @@
     "lint": "eslint",
     "worker": "tsx watch worker/index.ts",
     "worker:prod": "node worker/index.js",
-    "build:worker": "esbuild worker/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/worker.js --alias:@=./src --external:bcryptjs --external:facebook-nodejs-business-sdk",
+    "build:worker": "esbuild worker/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/worker.js --alias:@=./src --external:bcryptjs --external:facebook-nodejs-business-sdk --external:next/headers",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

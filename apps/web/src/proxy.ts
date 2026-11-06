@@ -60,7 +60,10 @@ export default auth((req: NextRequest & { auth: unknown }) => {
     return NextResponse.redirect(new URL("/403", req.url));
   }
 
-  return NextResponse.next();
+  // Para que el reporte de «Llamadas a Meta» sepa qué ruta hizo cada llamada.
+  const headers = new Headers(req.headers);
+  headers.set("x-meta-route", pathname);
+  return NextResponse.next({ request: { headers } });
 });
 
 export const config = {

@@ -306,13 +306,13 @@ async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[], token?:
   }
 }
 
-const worker = new Worker("duplications", (job, token) => withMetaSource(job.name, () => processJob(job, token)), {
+const worker = new Worker("duplications", (job, token) => withMetaSource(job.name, () => processJob(job, token), `worker · cola duplications · job ${job.id}`), {
   connection,
   concurrency: WORKER_CONCURRENCY,
 });
 
 // Los syncs van aparte: 2 a la vez como máximo, sin competir con las duplicaciones.
-const syncWorker = new Worker("syncs", (job) => withMetaSource(job.name, () => processSyncJob(job)), {
+const syncWorker = new Worker("syncs", (job) => withMetaSource(job.name, () => processSyncJob(job), `worker · cola syncs · job ${job.id}`), {
   connection,
   concurrency: 2,
 });

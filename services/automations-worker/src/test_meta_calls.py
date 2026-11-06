@@ -8,6 +8,7 @@ import json
 import queue
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -31,7 +32,10 @@ class MetaUrlopen(unittest.TestCase):
             self.addCleanup(parche.stop)
 
     def campos(self):
-        return [c.split(SEP) for _, _, c in list(self.cola.queue)]
+        return [c.split(SEP)[:4] for _, _, c, _ in list(self.cola.queue)]
+
+    def detalles(self):
+        return [json.loads(d) for _, _, _, d in list(self.cola.queue)]
 
     def test_llamada_correcta(self):
         resp = object()
@@ -60,6 +64,22 @@ class MetaUrlopen(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 meta_urlopen(urllib.request.Request(URL), "META_AUTOPAUSE", timeout=30)
         self.assertEqual(self.campos()[0][3], "error")
+
+    def test_el_batch_dice_que_lleva_y_nunca_el_token_de_sus_urls(self):
+        lote = [{"method": "GET", "relative_url": "act_1/insights?level=ad&access_token=token-pagina"}] * 7
+        cuerpo = urllib.parse.urlencode({"access_token": "token-secreto", "batch": json.dumps(lote)}).encode()
+        with mock.patch("urllib.request.urlopen"):
+            meta_urlopen(
+                urllib.request.Request("https://graph.facebook.com/v21.0/", data=cuerpo, method="POST"),
+                "UPDATE_SHEET", timeout=30,
+            )
+        d = self.detalles()[0]
+        self.assertEqual(d["batch"]["n"], 7)
+        self.assertEqual(d["batch"]["items"], ["GET act_1/insights"] * 5)
+        self.assertTrue(d["route"].startswith("automations-worker"))
+        crudo = repr(list(self.cola.queue))
+        self.assertNotIn("token-secreto", crudo)
+        self.assertNotIn("token-pagina", crudo)
 
     def test_batch_y_delete(self):
         with mock.patch("urllib.request.urlopen"):

@@ -7,30 +7,9 @@ import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ErrorDetails, errorInfoOf, type ErrorInfo } from "@/components/error-details";
+import { META_CALL_LOG_DAYS, META_CALL_LOG_MAX_PER_HOUR, explainEndpoint, sourceLabel } from "@/lib/meta-calls-explain";
 import type { CallRow, MetaCallsReport } from "@/lib/meta-calls";
-
-const SOURCE_LABELS: Record<string, string> = {
-  panel: "Panel (uso de las personas)",
-  sincronizar: "Botón «Sincronizar con Meta»",
-  SYNC_LISTINGS: "Sincronización de listados",
-  SYNC_LISTINGS_ACCOUNT: "Sincronización tras el botón",
-  SYNC_DASHBOARD: "Sincronización de Rendimiento",
-  SYNC_FANPAGES: "Sincronización de fanpages",
-  SYNC_SPEND_DAILY: "Gasto diario",
-  SYNC_ACCOUNTS: "Sincronización de cuentas",
-  SYNC_ACTIVE_ADS: "Sincronización de anuncios activos",
-  CREATE_PBIA_BULK: "Creación de PBIA",
-  DUPLICATE_CAMPAIGN: "Duplicar campañas",
-  DUPLICATE_ADSET: "Duplicar ad sets",
-  DUPLICATE_AD: "Duplicar anuncios",
-  DEEP_COPY: "Copia profunda",
-  CLONER: "Clonador",
-  BILLING_CHECK: "Automatización: estado de pagos",
-  META_AUTOPAUSE: "Automatización: autopausa",
-  META_CLEANUP: "Automatización: limpieza de anuncios",
-  UPDATE_SHEET: "Automatización: Google Sheet y Live Tracker",
-};
-const sourceLabel = (s: string) => SOURCE_LABELS[s] ?? s;
+import { CallLog } from "./call-log";
 
 // Cifras exactas: aquí 1.284 y 1.310 no deben verse iguales.
 const fmtInt = (n: number) => n.toLocaleString("es-CO");
@@ -128,6 +107,8 @@ export default function CallsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ErrorInfo | null>(null);
   const [accounts, setAccounts] = useState<Record<string, string>>({});
+  const [hour, setHour] = useState<number | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const load = useCallback(async (d: string | null) => {
     setLoading(true);
@@ -137,6 +118,7 @@ export default function CallsView() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "No se pudo cargar el reporte" }); return; }
       setReport(json);
+      setRefreshKey((k) => k + 1);
     } catch {
       setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión e inténtalo de nuevo." });
     } finally {
@@ -160,6 +142,9 @@ export default function CallsView() {
 
   const peak = report ? Math.max(...report.hours) : 0;
   const peakHour = report ? report.hours.indexOf(peak) : 0;
+  // Sin elegir hora se abre la última con llamadas: lo normal es querer ver lo más reciente.
+  const lastHour = report ? report.hours.findLastIndex((v) => v > 0) : -1;
+  const activeHour = hour ?? (lastHour >= 0 ? lastHour : null);
 
   return (
     <div className="space-y-4">
@@ -190,14 +175,18 @@ export default function CallsView() {
             <Bars
               title="Últimos 14 días · elige un día"
               selected={report.date}
-              onSelect={setDate}
+              onSelect={(d) => { setDate(d); setHour(null); }}
               items={report.days.map((d, i) => ({ key: d.date, tip: dayLabel(d.date), value: d.total, tick: i % 3 === 1 ? dayLabel(d.date) : undefined }))}
             />
             <Bars
-              title="Por hora (Colombia)"
+              title="Por hora (Colombia) · elige una hora"
+              selected={activeHour === null ? undefined : String(activeHour)}
+              onSelect={(h) => setHour(Number(h))}
               items={report.hours.map((v, h) => ({ key: String(h), tip: `${h}:00`, value: v, tick: h % 6 === 0 ? `${h}:00` : undefined }))}
             />
           </div>
+
+          {activeHour !== null && <CallLog date={report.date} hour={activeHour} refreshKey={refreshKey} accounts={accounts} />}
 
           {report.total === 0 ? (
             <p className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -208,19 +197,22 @@ export default function CallsView() {
               <Ranking
                 title="Dónde se van las llamadas"
                 rows={report.top} total={report.total}
-                name={(r) => { const t = r as (typeof report.top)[number]; return `${sourceLabel(t.source)} · ${t.endpoint}`; }}
+                name={(r) => { const t = r as (typeof report.top)[number]; return `${sourceLabel(t.source)} · ${explainEndpoint(t.endpoint)} (${t.endpoint})`; }}
               />
               <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                 <Ranking title="Por origen" rows={report.bySource} total={report.total} name={(r) => sourceLabel(r.key)} />
                 <Ranking title="Por cuenta" rows={report.byAccount} total={report.total} name={(r) => accounts[r.key] ? `${accounts[r.key]} · ${r.key}` : r.key} />
               </div>
-              <Ranking title="Por tipo de llamada" rows={report.byEndpoint} total={report.total} name={(r) => r.key} />
+              {report.byRoute.length > 0 && (
+                <Ranking title="Por ruta (de dónde sale la llamada)" rows={report.byRoute} total={report.total} name={(r) => r.key} />
+              )}
+              <Ranking title="Por tipo de llamada" rows={report.byEndpoint} total={report.total} name={(r) => `${explainEndpoint(r.key)} (${r.key})`} />
             </>
           )}
 
           <p className="text-xs text-muted-foreground">
             Cada intento cuenta como una llamada, incluidos los reintentos; un batch cuenta como una.
-            Se conservan 90 días.
+            Los totales se conservan 90 días; el detalle llamada a llamada, {META_CALL_LOG_DAYS} días y hasta {fmtInt(META_CALL_LOG_MAX_PER_HOUR)} llamadas por hora.
           </p>
         </>
       )}

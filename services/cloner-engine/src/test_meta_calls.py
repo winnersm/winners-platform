@@ -8,6 +8,7 @@ hasta que el token acaba en Redis.
 
 from __future__ import annotations
 
+import json
 import queue
 import unittest
 from unittest import mock
@@ -65,16 +66,20 @@ class Formato(unittest.TestCase):
         pipe = mock.Mock()
         cliente = mock.Mock()
         cliente.pipeline.return_value = pipe
-        campo = SEP.join(("CLONER", "GET ads", "1", "ok"))
+        campo = SEP.join(("CLONER", "GET ads", "1", "ok", "ruta"))
 
-        meta_calls._escribir(cliente, [("2026-11-06", "9", campo)] * 2)
+        meta_calls._escribir(cliente, [("2026-11-06", "9", campo, "{}")] * 2)
 
         self.assertEqual(pipe.hincrby.call_args_list, [
             mock.call("meta:calls:2026-11-06", campo, 1),
             mock.call("meta:calls:2026-11-06:hours", "9", 1),
             mock.call("meta:calls:2026-11-06:hours", "total", 1),
         ] * 2)
+        registro = "meta:calls:2026-11-06:log:9"
+        pipe.rpush.assert_called_with(registro, "{}")
+        pipe.ltrim.assert_called_with(registro, -20000, -1)
         pipe.expire.assert_has_calls([
+            mock.call(registro, 7 * 86400),
             mock.call("meta:calls:2026-11-06", 90 * 86400),
             mock.call("meta:calls:2026-11-06:hours", 90 * 86400),
         ])
@@ -92,7 +97,10 @@ class RegistroDelGraph(unittest.TestCase):
             self.addCleanup(parche.stop)
 
     def campos(self):
-        return [c.split(SEP) for _, _, c in list(self.cola.queue)]
+        return [c.split(SEP)[:4] for _, _, c, _ in list(self.cola.queue)]
+
+    def detalles(self):
+        return [json.loads(d) for _, _, _, d in list(self.cola.queue)]
 
     def test_cuenta_cada_pagina_y_nunca_guarda_el_token(self):
         self.g.session.request.return_value = Respuesta({
@@ -103,6 +111,28 @@ class RegistroDelGraph(unittest.TestCase):
 
         self.assertEqual(self.campos(), [["CLONER", "GET ads", "9", "ok"]] * 2)
         self.assertNotIn("token-secreto", repr(list(self.cola.queue)))
+
+    def test_el_detalle_dice_hora_ruta_y_campos_sin_valores(self):
+        self.g.session.request.return_value = Respuesta({"id": "1"})
+        self.g.post("123", status="PAUSED", name="nombre-privado")
+
+        d = self.detalles()[0]
+        self.assertEqual((d["ep"], d["path"], d["status"]), ("POST objeto", "123", "PAUSED"))
+        self.assertEqual(d["body"], ["status", "name"])
+        self.assertIn("test_meta_calls.py", d["route"])
+        self.assertTrue(d["route"].startswith("cloner-engine"))
+        self.assertGreater(d["t"], 1_000_000_000_000)
+        crudo = repr(list(self.cola.queue))
+        self.assertNotIn("token-secreto", crudo)
+        self.assertNotIn("nombre-privado", crudo)
+
+    def test_la_pagina_siguiente_se_marca_y_pierde_el_cursor(self):
+        self.g.session.request.return_value = Respuesta({
+            "data": [1], "paging": {"next": BASE + "/act_9/ads?access_token=token-secreto&after=cursor-x"}})
+        self.g.session.get.return_value = Respuesta({"data": []})
+        self.g.get_all("act_9/ads")
+        self.assertTrue(self.detalles()[1]["paged"])
+        self.assertNotIn("cursor-x", repr(list(self.cola.queue)))
 
     def test_cada_reintento_es_otra_llamada(self):
         self.g.session.request.side_effect = [

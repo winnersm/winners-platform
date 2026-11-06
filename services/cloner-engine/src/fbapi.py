@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from .meta_calls import registrar_llamada, resultado_de
+from .meta_calls import codigo_de, registrar_llamada, resultado_de
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(HERE, ".env")
@@ -92,16 +92,21 @@ class Graph:
         while True:
             attempt += 1
             self.calls += 1
+            inicio = time.time()
+            params, cuerpo = kwargs.get("params"), kwargs.get("data")
             try:
                 resp = self.session.request(method, url, timeout=120, **kwargs)
             except Exception:
-                registrar_llamada(ORIGEN, method, url, "error", kwargs.get("params"))
+                registrar_llamada(ORIGEN, method, url, "error", params, cuerpo, inicio)
                 raise
             try:
                 payload = resp.json()
             except ValueError:
                 payload = {}
-            registrar_llamada(ORIGEN, method, url, resultado_de(resp.ok, payload), kwargs.get("params"))
+            registrar_llamada(
+                ORIGEN, method, url, resultado_de(resp.ok, payload), params, cuerpo, inicio,
+                getattr(resp, "status_code", None), codigo_de(payload),
+            )
 
             if resp.ok and not (isinstance(payload, dict) and "error" in payload):
                 return payload
@@ -178,14 +183,18 @@ class Graph:
             nxt = (page.get("paging") or {}).get("next")
             if not nxt:
                 return out
+            inicio = time.time()
             try:
                 resp = self.session.get(nxt, timeout=120)
                 self.calls += 1
                 page = resp.json()
             except Exception:
-                registrar_llamada(ORIGEN, "GET", nxt, "error")
+                registrar_llamada(ORIGEN, "GET", nxt, "error", inicio=inicio)
                 raise
-            registrar_llamada(ORIGEN, "GET", nxt, resultado_de(resp.ok, page))
+            registrar_llamada(
+                ORIGEN, "GET", nxt, resultado_de(resp.ok, page), inicio=inicio,
+                http=getattr(resp, "status_code", None), codigo=codigo_de(page),
+            )
             if "error" in page:
                 raise ApiError(page["error"], path)
 
