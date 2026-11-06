@@ -178,6 +178,8 @@ Content-Type: application/x-www-form-urlencoded
 access_token=...&name=Campa%C3%B1a+Verano+1&status_option=PAUSED
 ```
 
+La petición lleva `name`, pero Meta no lo aplica (ver más abajo).
+
 Respuesta de Meta:
 
 ```json
@@ -187,6 +189,19 @@ Respuesta de Meta:
 ```
 
 El id se guarda en `MetaJob.output.newCampaignId` como punto de control (`onCheckpoint`). Si el trabajo se interrumpe después de este punto, la reanudación continúa sobre esa campaña sin crear otra.
+
+El endpoint `/copies` no aplica el parámetro `name`: la copia conserva el nombre del original. Por eso, justo después del punto de control, se fija el nombre pedido (con su número) en una llamada aparte:
+
+```
+POST https://graph.facebook.com/v21.0/{newCampaignId}
+access_token=...&name=Campa%C3%B1a+Verano+1
+```
+
+```json
+{ "success": true }
+```
+
+Al reanudar, se lee `GET /{newCampaignId}?fields=id,name` y, si el nombre no coincide con el pedido, se vuelve a fijar.
 
 ### Fase 3: crear los ad sets en la copia
 

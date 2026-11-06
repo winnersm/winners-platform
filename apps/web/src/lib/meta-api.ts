@@ -1261,8 +1261,9 @@ export async function duplicateCampaign(
   let resumed = false;
   if (newCampaignId) {
     try {
-      await metaGet(newCampaignId, token, { fields: "id" }, 1);
+      const cur = await metaGet(newCampaignId, token, { fields: "id,name" }, 1);
       resumed = true;
+      if (cur.name !== name) await metaPost(newCampaignId, token, { name });
       await cb(8, `Reanudando sobre la copia ya creada (${newCampaignId})`);
     } catch (e) {
       if (!(e instanceof MetaApiError && e.kind === "not_found")) throw e;
@@ -1276,7 +1277,10 @@ export async function duplicateCampaign(
     const campaignJson = await metaPost(`${campaignId}/copies`, token, { name, status_option: "PAUSED" });
     newCampaignId = (campaignJson.copied_campaign_id ?? campaignJson.id) as string;
     await opts.onCheckpoint?.({ newCampaignId });
-    console.log(`[duplicate] Campaña copiada | newCampaignId=${newCampaignId}`);
+    // /copies no aplica `name`: Meta deja el nombre del original con su sufijo. Se fija aquí
+    // el nombre pedido (con su número) en una llamada aparte.
+    await metaPost(newCampaignId, token, { name });
+    console.log(`[duplicate] Campaña copiada y nombrada | newCampaignId=${newCampaignId} name="${name}"`);
     await cb(10, `Campaña copiada → ${newCampaignId}`);
   }
 
