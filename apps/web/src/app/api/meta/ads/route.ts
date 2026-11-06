@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getAds, type MetaAd } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
-import { readSnapshotWithAge } from "@/lib/listing-sync";
+import { readSnapshotWithAge, saveListingSnapshot } from "@/lib/listing-sync";
 import { errorResponse } from "@/lib/api-error";
 import { serializeError, userLine } from "@/lib/meta-errors";
 
@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
     }
     try {
       const ads = await getAds(accountId, adsetId ?? undefined, bmId, op, { force: refresh });
+      if (refresh && op && !adsetId) await saveListingSnapshot(op, accountId, "ads", "", ads);
       return NextResponse.json({ ads, syncedAt: new Date(), source: "meta" });
     } catch (e) {
       if (!snap) throw e;

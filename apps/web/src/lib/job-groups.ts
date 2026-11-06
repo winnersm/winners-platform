@@ -9,6 +9,7 @@ export interface JobLike {
   input: Record<string, unknown> | null;
   output: Record<string, unknown> | null;
   logs: Array<{ ts: string; msg: string }> | null;
+  error?: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -29,8 +30,8 @@ export const kindOf = (type: string): JobKind => KIND_BY_TYPE[type] ?? "other";
 
 /** Envíos seguidos a esta distancia cuentan como una misma tanda. */
 const GROUP_GAP_MS = 5 * 60 * 1000;
-/** Tiempo que un error sigue destacado arriba antes de pasar al historial. */
-const ERROR_HIGHLIGHT_MS = 48 * 3600 * 1000;
+/** Tiempo que un error sigue en la pestaña «Con error»; después, solo en Historial. */
+const ERROR_WINDOW_MS = 7 * 24 * 3600 * 1000;
 
 export interface JobGroup<T extends JobLike> {
   key: string;
@@ -129,11 +130,9 @@ function resultOf(kind: JobKind, jobs: JobLike[]): string {
     return `${done} de ${total} copias`;
   }
   if (kind === "adset") {
-    const sources = jobs.reduce((n, j) => n + listOf(j.input?.adsetIds).length, 0);
     const expected = jobs.reduce((n, j) => n + listOf(j.input?.adsetIds).length * (Number(j.input?.count) || 1), 0);
     const created = jobs.reduce((n, j) => n + numberOf(j.output?.adsetsCount), 0);
-    const copies = created === expected ? plural(created, "copia", "copias") : `${created} de ${plural(expected, "copia", "copias")}`;
-    return `${plural(sources, "ad set", "ad sets")} → ${copies}`;
+    return created === expected ? plural(created, "copia", "copias") : `${created} de ${plural(expected, "copia", "copias")}`;
   }
   if (kind === "ad") {
     const expected = jobs.reduce((n, j) => n + listOf(j.input?.ads).length, 0);
@@ -170,11 +169,21 @@ export function describeGroup(kind: JobKind, jobs: JobLike[]) {
   const unique = (values: Array<string | null | undefined>) => [...new Set(values.filter((v): v is string => !!v))];
   const accounts = unique(jobs.map(j => j.accountName ?? (j.input?.accountId as string | undefined)));
   const people = unique(jobs.map(j => j.userName));
+  const failed = jobs.filter(j => j.status === "failed");
+  const errors = unique(failed.map(j => (j.output?.error as { title?: string } | undefined)?.title ?? j.error ?? "Error"));
+  const waits = jobs
+    .filter(j => j.status === "pending")
+    .map(j => j.output?.waiting as { reason?: string; until?: string } | undefined)
+    .filter((w): w is { reason: string; until?: string } => !!w?.reason);
   return {
     subject: subjectOf(kind, jobs),
     result: resultOf(kind, jobs),
     counts,
     active: counts.processing + counts.pending,
+    errors,
+    /** Prioriza el aviso de límite de Meta sobre «cuenta ocupada». */
+    waiting: waits.find(w => /Meta/.test(w.reason)) ?? waits[0] ?? null,
+    withIssues: jobs.filter(j => j.status === "completed" && listOf(j.output?.issues).length > 0).length,
     account: accounts.length > 1 ? `${accounts.length} cuentas` : accounts[0] ?? null,
     person: people.length > 1 ? `${people.length} personas` : people[0] ?? null,
     createdAt: jobs[jobs.length - 1]?.createdAt ?? "",
@@ -191,47 +200,65 @@ export function formatSpan(ms: number): string {
   return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
 }
 
-export interface JobSection<T extends JobLike> {
-  key: string;
-  label: string;
-  tone?: "active" | "error";
-  groups: JobGroup<T>[];
+/** Nombre corto de la cuenta: «#3025 - ROAS 1 - Grupo Winners…» → «ROAS 1». */
+export function shortAccount(name: string | null): string | null {
+  if (!name) return null;
+  const m = /^#\d+\s*-\s*([^-[]+)/.exec(name);
+  return m ? m[1].trim() : name;
 }
 
-const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-
-function dayLabel(iso: string, now: number): string {
+/** Cuándo, en palabras: «hace 12 min», «ayer», «27 oct». */
+export function timeAgo(iso: string, now: number): string {
+  if (!iso || !now) return "";
   const date = new Date(iso);
-  const today = new Date(now);
-  const yesterday = new Date(now - 24 * 3600 * 1000);
-  if (dayKey(date) === dayKey(today)) return "Hoy";
-  if (dayKey(date) === dayKey(yesterday)) return "Ayer";
+  const mins = Math.max(0, Math.round((now - date.getTime()) / 60_000));
+  if (mins < 1) return "ahora";
+  if (mins < 60) return `hace ${mins} min`;
+  if (mins < 12 * 60) return `hace ${Math.round(mins / 60)} h`;
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(new Date(now)) - day(date)) / (24 * 3600 * 1000));
+  if (days === 0) return "hoy";
+  if (days === 1) return "ayer";
   return date.toLocaleDateString("es-CO", {
     day: "numeric", month: "short",
-    ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }),
+    ...(date.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
   });
 }
 
-/** Lo que requiere atención arriba; el resto, por día. */
-export function sectionize<T extends JobLike>(groups: JobGroup<T>[], now: number): JobSection<T>[] {
-  const active: JobGroup<T>[] = [];
-  const failed: JobGroup<T>[] = [];
-  const days = new Map<string, JobGroup<T>[]>();
+export type JobTone = "info" | "muted" | "danger" | "warning" | "success";
 
-  for (const group of groups) {
-    const running = group.jobs.some(j => j.status === "pending" || j.status === "processing");
-    const hasRecentError = group.jobs.some(j => j.status === "failed" && now - time(j.updatedAt) < ERROR_HIGHLIGHT_MS);
-    if (running) active.push(group);
-    else if (hasRecentError) failed.push(group);
-    else {
-      const label = dayLabel(group.jobs[0].createdAt, now);
-      days.set(label, [...(days.get(label) ?? []), group]);
-    }
-  }
+/** Estado del grupo en una palabra. */
+export function statusOf(info: ReturnType<typeof describeGroup>): { label: string; tone: JobTone } {
+  const { counts, active, withIssues } = info;
+  const total = counts.completed + counts.failed + counts.cancelled + active;
+  if (counts.processing > 0) return { label: "En curso", tone: "info" };
+  if (active > 0) return { label: "En cola", tone: "muted" };
+  if (counts.failed === total) return { label: "Falló", tone: "danger" };
+  if (counts.failed > 0) return { label: "Con errores", tone: "danger" };
+  if (counts.cancelled === total) return { label: "Cancelado", tone: "muted" };
+  if (withIssues > 0) return { label: "Con avisos", tone: "warning" };
+  return { label: "Listo", tone: "success" };
+}
 
-  return [
-    ...(active.length ? [{ key: "active", label: "En curso", tone: "active" as const, groups: active }] : []),
-    ...(failed.length ? [{ key: "failed", label: "Con error", tone: "error" as const, groups: failed }] : []),
-    ...[...days].map(([label, list]) => ({ key: label, label, groups: list })),
-  ];
+export type JobTab = "active" | "failed" | "history";
+
+/** Cifras de las pestañas: trabajos, igual que el botón flotante, no filas. */
+export function tabCounts<T extends JobLike>(tabs: Record<JobTab, JobGroup<T>[]>) {
+  const jobs = (groups: JobGroup<T>[], match: (status: string) => boolean) =>
+    groups.reduce((n, g) => n + g.jobs.filter(j => match(j.status)).length, 0);
+  return {
+    active: jobs(tabs.active, s => s === "pending" || s === "processing"),
+    failed: jobs(tabs.failed, s => s === "failed"),
+  };
+}
+
+/** Reparte los grupos en las pestañas. Historial incluye todo lo terminado. */
+export function splitByTab<T extends JobLike>(groups: JobGroup<T>[], now: number): Record<JobTab, JobGroup<T>[]> {
+  const isRunning = (g: JobGroup<T>) => g.jobs.some(j => j.status === "pending" || j.status === "processing");
+  const hasError = (g: JobGroup<T>) => g.jobs.some(j => j.status === "failed" && now - time(j.updatedAt) < ERROR_WINDOW_MS);
+  return {
+    active: groups.filter(isRunning),
+    failed: groups.filter(g => !isRunning(g) && hasError(g)),
+    history: groups.filter(g => !isRunning(g)),
+  };
 }

@@ -5,8 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Briefcase, ExternalLink, Loader2, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { JobSections, type Job } from "@/components/job-list";
-import { groupJobs } from "@/lib/job-groups";
+import { JobList, JobTabs, type Job } from "@/components/job-list";
+import { groupJobs, splitByTab, tabCounts, type JobTab } from "@/lib/job-groups";
 import { JOBS_DOCK_EVENTS } from "@/lib/jobs-dock-events";
 
 // Panel flotante de Trabajos, disponible en toda la plataforma. No bloquea la
@@ -19,14 +19,13 @@ const POLL_IDLE_MS = 60_000;
 const SEEN_KEY = "jobs_seen_at";
 const DAY_MS = 24 * 3600 * 1000;
 
-type Tab = "active" | "failed" | "all";
 const isActive = (j: Job) => j.status === "pending" || j.status === "processing";
 const isFailed = (j: Job) => j.status === "failed";
 
 export function JobsDock() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<Tab>("active");
+  const [tab, setTab] = useState<JobTab>("active");
   const [summary, setSummary] = useState({ active: 0, failed: 0, lastFailedAt: null as string | null });
   const [seenAt, setSeenAt] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[] | null>(null);
@@ -104,7 +103,7 @@ export function JobsDock() {
     if (!open) {
       // Al abrir: la pestaña útil (errores nuevos antes que nada) y errores vistos.
       const nowIso = new Date().toISOString();
-      setTab(hasNewErrors ? "failed" : summary.active > 0 ? "active" : "all");
+      setTab(hasNewErrors ? "failed" : "active");
       setSeenAt(nowIso);
       try { localStorage.setItem(SEEN_KEY, nowIso); } catch { /* sin almacenamiento */ }
     }
@@ -129,13 +128,7 @@ export function JobsDock() {
   const doneToday = list.filter(j => j.status === "completed" && recent(j)).length;
   const failedToday = list.filter(j => isFailed(j) && recent(j)).length;
 
-  const visible = tab === "active" ? isActive : tab === "failed" ? (j: Job) => isFailed(j) && recent(j) : undefined;
-  const groups = groupJobs(list).filter(g => !visible || g.jobs.some(visible)).slice(0, 30);
-  const tabs: Array<{ id: Tab; label: string }> = [
-    { id: "active", label: `Activos (${running + queued})` },
-    { id: "failed", label: `Con error (${failedToday})` },
-    { id: "all", label: "Todos" },
-  ];
+  const tabs = splitByTab(groupJobs(list), nowTs);
 
   return (
     <>
@@ -162,21 +155,15 @@ export function JobsDock() {
 
           {/* Resumen rápido */}
           <div className="grid grid-cols-4 divide-x border-b text-center">
-            <Stat label="En curso" value={running} className="text-blue-600" />
+            <Stat label="En curso" value={running} className="text-info" />
             <Stat label="En cola" value={queued} />
-            <Stat label="Listos 24 h" value={doneToday} className="text-green-700" />
-            <Stat label="Con error 24 h" value={failedToday} className={failedToday > 0 ? "text-red-600" : ""} />
+            <Stat label="Listos 24 h" value={doneToday} className="text-success" />
+            <Stat label="Con error 24 h" value={failedToday} className={failedToday > 0 ? "text-danger" : ""} />
           </div>
 
-          <div className="flex items-center gap-1 border-b px-3 py-1.5">
-            {tabs.map(t => (
-              <button
-                key={t.id} type="button" onClick={() => setTab(t.id)}
-                className={`rounded px-2 py-1 text-xs transition-colors ${tab === t.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-              >
-                {t.label}
-              </button>
-            ))}
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
+            <JobTabs tab={tab} onChange={setTab} counts={tabCounts(tabs)} withHistory={false} />
+            <Link href="/meta/jobs" className="text-xs text-primary hover:underline">Ver historial</Link>
           </div>
 
           <div className="flex-1 space-y-2 overflow-y-auto bg-muted/20 p-2">
@@ -186,12 +173,7 @@ export function JobsDock() {
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando…
               </p>
             )}
-            {jobs && groups.length === 0 && (
-              <p className="py-8 text-center text-xs text-muted-foreground">
-                {tab === "active" ? "No hay trabajos en curso" : tab === "failed" ? "Sin errores en las últimas 24 horas" : "No hay trabajos todavía"}
-              </p>
-            )}
-            <JobSections groups={groups} now={nowTs} visible={visible} onChanged={refresh} compact />
+            {jobs && <JobList groups={tabs[tab].slice(0, 30)} tab={tab} now={nowTs} onChanged={refresh} compact />}
           </div>
         </section>
       )}
@@ -199,15 +181,15 @@ export function JobsDock() {
       <button
         type="button" onClick={toggle} aria-expanded={open}
         title="Trabajos"
-        className={`fixed bottom-4 right-4 z-40 inline-flex h-10 items-center gap-2 rounded-full border bg-card px-3 text-xs font-medium shadow-lg transition-colors hover:bg-muted ${hasNewErrors ? "border-red-300" : ""}`}
+        className={`fixed bottom-4 right-4 z-40 inline-flex h-10 items-center gap-2 rounded-full border bg-card px-3 text-xs font-medium shadow-lg transition-colors hover:bg-muted ${hasNewErrors ? "border-danger/40" : ""}`}
       >
         {summary.active > 0
-          ? <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+          ? <Loader2 className="h-4 w-4 animate-spin text-info" />
           : <Briefcase className="h-4 w-4 text-muted-foreground" />}
         {summary.active > 0 && <span>{summary.active} activo{summary.active > 1 ? "s" : ""}</span>}
         {hasNewErrors && (
-          <span className="inline-flex items-center gap-1 text-red-600">
-            <span className="h-2 w-2 rounded-full bg-red-500" /> {summary.failed} con error
+          <span className="inline-flex items-center gap-1 text-danger">
+            <span className="h-2 w-2 rounded-full bg-danger" /> {summary.failed} con error
           </span>
         )}
         {summary.active === 0 && !hasNewErrors && <span className="text-muted-foreground">Trabajos</span>}

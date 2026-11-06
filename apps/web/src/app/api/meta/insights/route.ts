@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getInsights, type MetaInsights } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
-import { readSnapshotWithAge } from "@/lib/listing-sync";
+import { readSnapshotWithAge, saveListingSnapshot } from "@/lib/listing-sync";
 import { errorResponse } from "@/lib/api-error";
 import { serializeError, userLine } from "@/lib/meta-errors";
 
@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
     }
     try {
       const data = await getInsights(accountId, level, datePreset, bmId, op, { force: refresh });
+      if (refresh && op) await saveListingSnapshot(op, accountId, `ins:${level}`, datePreset, data);
       return NextResponse.json({ data, count: data.length, syncedAt: new Date(), source: "meta" });
     } catch (e) {
       if (!snap) throw e;

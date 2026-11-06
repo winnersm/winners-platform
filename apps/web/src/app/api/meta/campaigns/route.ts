@@ -9,8 +9,9 @@ import { serializeError, userLine } from "@/lib/meta-errors";
 
 // Campañas de una cuenta.
 //  - Normal: copia de DB si es reciente (<45 min); si es vieja, Meta en vivo.
-//  - refresh=true («Traer de Meta»): Meta en vivo saltando cachés + re-sync de
-//    la cuenta en segundo plano (adsets/ads/insights).
+//  - refresh=true («Sincronizar con Meta»): Meta en vivo saltando cachés + re-sync de
+//    campañas y sus métricas en segundo plano. Ad sets y anuncios no se tocan aquí:
+//    se sincronizan cada 6 h o desde su propia pestaña.
 // Si Meta falla y hay copia, se sirve la copia marcada como desactualizada.
 export async function GET(req: NextRequest) {
   const session = await auth();
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
         await invalidateAccountCaches(accountId);
         if (op && bmId) {
           try {
-            await syncQueue.add(JOB_TYPES.SYNC_LISTINGS_ACCOUNT, { operationId: op, accountId, bmId }, {
+            await syncQueue.add(JOB_TYPES.SYNC_LISTINGS_ACCOUNT, { operationId: op, accountId, bmId, scope: "light" }, {
               jobId: `sync-acc-${op}-${accountId}-${Math.floor(Date.now() / 60_000)}`, // 1 por minuto y cuenta
               removeOnComplete: true, removeOnFail: true,
             });

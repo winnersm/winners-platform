@@ -27,6 +27,14 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -72,6 +80,16 @@
   --accent-foreground: oklch(0.54 0.22 265);
 
   --destructive: oklch(0.577 0.245 27.325);
+
+  /* Estados: usar estos en lugar de text-red-600, bg-green-50… para que se lean en ambos modos */
+  --success: oklch(0.5 0.13 150);
+  --success-soft: oklch(0.96 0.03 150);
+  --danger: oklch(0.55 0.21 27);
+  --danger-soft: oklch(0.96 0.02 27);
+  --warning: oklch(0.52 0.12 70);
+  --warning-soft: oklch(0.96 0.04 90);
+  --info: oklch(0.52 0.18 260);
+  --info-soft: oklch(0.96 0.02 260);
   --border: oklch(0.88 0.006 247);
   --input: oklch(0.88 0.006 247);
   --ring: oklch(0.54 0.22 265);
@@ -111,6 +129,14 @@
   --accent: oklch(0.33 0.05 265);
   --accent-foreground: oklch(0.9 0.03 265);
   --destructive: oklch(0.62 0.22 25);
+  --success: oklch(0.8 0.15 155);
+  --success-soft: oklch(0.32 0.05 155);
+  --danger: oklch(0.78 0.14 22);
+  --danger-soft: oklch(0.33 0.07 22);
+  --warning: oklch(0.84 0.13 85);
+  --warning-soft: oklch(0.33 0.05 85);
+  --info: oklch(0.78 0.12 255);
+  --info-soft: oklch(0.33 0.06 260);
   --border: oklch(0.34 0.03 264);
   --input: oklch(0.34 0.03 264);
   --ring: oklch(0.62 0.19 265);

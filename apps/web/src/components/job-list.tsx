@@ -2,18 +2,15 @@
 
 import { useState } from "react";
 import {
-  ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock, Loader2, Ban, Trash2, AlertTriangle, ExternalLink,
+  ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock, Loader2, Ban, Trash2, ExternalLink,
   Megaphone, Layers, Image as ImageIcon, RefreshCw, Camera, Briefcase,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from "@/components/ui/dialog";
 import { ErrorDetails, WaitingNote, toastApiError, type ErrorInfo } from "@/components/error-details";
 import {
-  describeGroup, formatSpan, kindOf, sectionize, type JobGroup, type JobKind,
+  describeGroup, formatSpan, kindOf, shortAccount, statusOf, timeAgo,
+  type JobGroup, type JobKind, type JobTab, type JobTone,
 } from "@/lib/job-groups";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -38,81 +35,35 @@ export interface Job {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const TYPE_LABELS: Record<string, string> = {
-  DUPLICATE_CAMPAIGN: "Duplicar campaña",
-  DUPLICATE_ADSET: "Duplicar ad sets",
-  DUPLICATE_AD: "Duplicar ads",
-  CREATE_PBIA_BULK: "Crear PBIA (masivo)",
-  SYNC_ACTIVE_ADS: "Sincronizar ads activos",
-};
-
 const STATUS_ICONS: Record<string, React.ReactNode> = {
-  pending: <Clock className="h-4 w-4 text-yellow-500" />,
-  processing: <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />,
-  completed: <CheckCircle2 className="h-4 w-4 text-green-600" />,
-  failed: <XCircle className="h-4 w-4 text-red-500" />,
+  pending: <Clock className="h-4 w-4 text-warning" />,
+  processing: <Loader2 className="h-4 w-4 text-info animate-spin" />,
+  completed: <CheckCircle2 className="h-4 w-4 text-success" />,
+  failed: <XCircle className="h-4 w-4 text-danger" />,
   cancelled: <Ban className="h-4 w-4 text-muted-foreground" />,
 };
 
-export const STATUS_LABEL: Record<string, string> = {
-  pending: "En cola", processing: "En curso", completed: "Completado", failed: "Con error", cancelled: "Cancelado",
+const TONE: Record<JobTone, string> = {
+  info: "bg-info-soft text-info",
+  muted: "bg-muted text-muted-foreground",
+  danger: "bg-danger-soft text-danger",
+  warning: "bg-warning-soft text-warning",
+  success: "bg-success-soft text-success",
 };
 
-const STATUS_BADGE: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  pending: "secondary",
-  processing: "default",
-  completed: "outline",
-  failed: "destructive",
-  cancelled: "secondary",
+const KIND: Record<JobKind, { label: string; icon: typeof Layers }> = {
+  campaign: { label: "Campañas", icon: Megaphone },
+  adset: { label: "Ad sets", icon: Layers },
+  ad: { label: "Anuncios", icon: ImageIcon },
+  sync: { label: "Sincronización", icon: RefreshCw },
+  pbia: { label: "PBIA", icon: Camera },
+  other: { label: "Trabajo", icon: Briefcase },
 };
 
 function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleString("es-MX", {
+  return new Date(iso).toLocaleString("es-CO", {
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
-}
-
-const describeJob = (job: Job) => describeGroup(kindOf(job.type), [job]);
-
-// Cada tipo de trabajo con su color e icono, para distinguirlos de un vistazo.
-const KIND_TAG: Record<JobKind, { label: string; icon: typeof Layers; className: string }> = {
-  campaign: { label: "Campañas", icon: Megaphone, className: "bg-blue-50 text-blue-700 border-blue-200" },
-  adset: { label: "Ad sets", icon: Layers, className: "bg-violet-50 text-violet-700 border-violet-200" },
-  ad: { label: "Anuncios", icon: ImageIcon, className: "bg-amber-50 text-amber-700 border-amber-200" },
-  sync: { label: "Sincronización", icon: RefreshCw, className: "bg-slate-50 text-slate-600 border-slate-200" },
-  pbia: { label: "PBIA", icon: Camera, className: "bg-pink-50 text-pink-700 border-pink-200" },
-  other: { label: "Trabajo", icon: Briefcase, className: "bg-slate-50 text-slate-600 border-slate-200" },
-};
-
-function KindTag({ kind }: { kind: JobKind }) {
-  const { label, icon: Icon, className } = KIND_TAG[kind];
-  return (
-    <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${className}`}>
-      <Icon className="h-3 w-3" /> {label}
-    </span>
-  );
-}
-
-/** Cuenta, persona, fecha y tiempos: separa la espera en cola del trabajo real. */
-function MetaLine({ info, showDate = true }: { info: ReturnType<typeof describeGroup>; showDate?: boolean }) {
-  const parts = [
-    info.account,
-    info.person,
-    showDate && info.createdAt ? fmtDate(info.createdAt) : null,
-    info.queueMs != null && info.queueMs >= 60_000 ? `En cola ${formatSpan(info.queueMs)}` : null,
-    info.active === 0 && info.workMs != null ? `Trabajó ${formatSpan(info.workMs)}` : null,
-  ].filter(Boolean);
-  return <span className="text-[11px] text-muted-foreground">{parts.join(" · ")}</span>;
-}
-
-function outputSummary(job: Job): string | null {
-  if (!job.output) return null;
-  const o = job.output;
-  const parts: string[] = [];
-  const of = (n: unknown, total: unknown) => typeof total === "number" && total !== n ? `${n}/${total}` : `${n}`;
-  if (typeof o.adsetsCount === "number") parts.push(`${of(o.adsetsCount, o.adsetsExpected)} adsets`);
-  if (typeof o.adsCount === "number") parts.push(`${of(o.adsCount, o.adsExpected)} ads`);
-  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 interface Issue { step: string; name: string; sourceId?: string; error: ErrorInfo }
@@ -122,292 +73,172 @@ function issuesOf(job: Job): Issue[] {
   const v = job.output?.issues;
   return Array.isArray(v) ? (v as Issue[]) : [];
 }
-function waitingOf(job: Job): { reason: string; until?: string } | null {
-  const w = job.output?.waiting as { reason?: string; until?: string } | undefined;
-  return w?.reason ? { reason: w.reason, until: w.until } : null;
-}
-function batchOf(job: Job): { id: string; seq: number; total: number } | null {
-  const i = job.input ?? {};
-  return typeof i.batchId === "string" && typeof i.total === "number" && i.total > 1
-    ? { id: i.batchId, seq: Number(i.seq ?? 0), total: i.total }
-    : null;
-}
 
-// ─── Row ──────────────────────────────────────────────────────────────────────
+// ─── Detalle de un trabajo ────────────────────────────────────────────────────
 
-export function JobRow({ job, onChanged, compact = false, nested = false }: {
-  job: Job; onChanged: () => void; compact?: boolean;
-  /** Dentro de un grupo: el tipo y la cuenta ya se ven en la tarjeta. */
-  nested?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [acting, setActing] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const isActive = job.status === "pending" || job.status === "processing";
+function JobDetail({ job, onChanged }: { job: Job; onChanged: () => void }) {
+  const [deleting, setDeleting] = useState(false);
   const logs: LogEntry[] = Array.isArray(job.logs) ? job.logs : [];
   const issues = issuesOf(job);
-  const waiting = job.status === "pending" ? waitingOf(job) : null;
-  const batch = batchOf(job);
+  const info = describeGroup(kindOf(job.type), [job]);
+  const isActive = job.status === "pending" || job.status === "processing";
   const newCampaignId = typeof job.output?.newCampaignId === "string" ? job.output.newCampaignId : null;
-  const accountId = typeof job.input?.accountId === "string" ? job.input.accountId : null;
-  const info = describeJob(job);
-  const kind = kindOf(job.type);
-  const result = kind === "campaign" ? outputSummary(job) : info.result;
+  const accountId = typeof job.input?.accountId === "string" ? job.input.accountId.replace("act_", "") : null;
+  const times = [
+    info.queueMs != null && info.queueMs >= 60_000 ? `En cola ${formatSpan(info.queueMs)}` : null,
+    info.workMs != null && !isActive ? `Trabajó ${formatSpan(info.workMs)}` : null,
+    info.account,
+    fmtDate(job.createdAt),
+  ].filter(Boolean);
 
-  function openConfirm(e: React.MouseEvent) {
-    e.stopPropagation();
-    setConfirmOpen(true);
-  }
-
-  async function doAction() {
-    setActing(true);
+  async function remove() {
+    if (!confirm("¿Quitar este trabajo del historial? No afecta nada en Meta.")) return;
+    setDeleting(true);
     try {
       const res = await fetch(`/api/jobs/${job.id}`, { method: "DELETE" });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) { toastApiError(json, "No se pudo completar la acción"); return; }
-      toast.success(isActive ? "Trabajo cancelado" : "Trabajo eliminado");
-      setConfirmOpen(false);
+      if (!res.ok) { toastApiError(await res.json().catch(() => ({})), "No se pudo eliminar"); return; }
+      toast.success("Trabajo eliminado");
       onChanged();
     } catch {
-      toast.error("Error de red");
+      toast.error("No se pudo conectar con el servidor");
     } finally {
-      setActing(false);
+      setDeleting(false);
     }
   }
 
   return (
-    <div className={`border rounded-lg bg-white ${isActive ? "border-blue-200 shadow-sm" : "border-border"}`}>
-      <div
-        className={`flex items-center flex-wrap sm:flex-nowrap cursor-pointer hover:bg-muted/20 transition-colors ${compact ? "gap-2 px-3 py-2" : "gap-3 px-4 py-3"}`}
-        onClick={() => setOpen(o => !o)}
-      >
-        <div className="shrink-0">{STATUS_ICONS[job.status] ?? <Clock className="h-4 w-4" />}</div>
+    <div className="space-y-3">
+      {job.status === "failed" && (
+        <ErrorDetails info={job.output?.error as ErrorInfo | undefined} fallback={job.error ?? "El trabajo falló"} />
+      )}
 
-        <div className="flex-1 min-w-0 basis-[calc(100%-1.75rem)] sm:basis-0">
-          <div className="flex items-center gap-2 min-w-0">
-            {!nested && <KindTag kind={kind} />}
-            {batch && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0" title={`Lote ${batch.id}`}>
-                {batch.seq}/{batch.total}
-              </Badge>
-            )}
-            <span className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`} title={info.subject}>{info.subject}</span>
-          </div>
-          <div className="flex items-center gap-x-3 gap-y-0.5 mt-0.5 flex-wrap">
-            {result && <span className={`text-[11px] font-medium ${job.status === "completed" ? "text-green-700" : "text-foreground"}`}>{result}</span>}
-            {nested
-              ? <span className="text-[11px] text-muted-foreground">{fmtDate(job.createdAt)}</span>
-              : <MetaLine info={info} />}
-            {job.status === "completed" && issues.length > 0 && (
-              <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
-                <AlertTriangle className="h-3 w-3" /> {issues.length} incidencia{issues.length > 1 ? "s" : ""}
-              </span>
-            )}
-            {waiting && <WaitingNote reason={waiting.reason} until={waiting.until} />}
-            {job.status === "failed" && job.error && (
-              <span className="text-[11px] text-red-600 truncate max-w-full" title={job.error}>{job.error}</span>
-            )}
-          </div>
-        </div>
-
-        <div className={`flex items-center shrink-0 w-full justify-end sm:w-auto ${compact ? "gap-1.5" : "gap-3"}`}>
-          {/* «Completado» es lo normal: solo se destaca lo que pide atención. */}
-          {!compact && job.status !== "completed" && (
-            <Badge variant={STATUS_BADGE[job.status] ?? "outline"} className="text-xs">
-              {STATUS_LABEL[job.status] ?? job.status}
-            </Badge>
-          )}
-
-          {isActive && (
-            <div className={compact ? "w-14" : "w-24"}>
-              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                  style={{ width: `${job.progress}%` }}
-                />
-              </div>
-              <span className="text-[10px] text-muted-foreground">{job.progress}%</span>
-            </div>
-          )}
-
-          {isActive ? (
-            <Button
-              variant="ghost" size="sm"
-              className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
-              onClick={openConfirm} disabled={acting}
-              title="Cancelar trabajo"
-            >
-              {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
-              {!compact && <span className="ml-1 text-xs">Cancelar</span>}
-            </Button>
-          ) : (
-            <Button
-              variant="ghost" size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-              onClick={openConfirm} disabled={acting}
-              title="Eliminar del historial"
-            >
-              {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            </Button>
-          )}
-
-          {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-        </div>
-      </div>
-
-      {open && (
-        <div className="border-t px-4 py-3 bg-muted/10 space-y-3">
-          {job.status === "failed" && (
-            <ErrorDetails info={job.output?.error as ErrorInfo | undefined} fallback={job.error ?? "El trabajo falló"} />
-          )}
-
-          {issues.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium text-amber-800">
-                Se completó, pero {issues.length} elemento{issues.length > 1 ? "s" : ""} no se pudo crear:
+      {issues.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-warning">
+            Se completó, pero {issues.length} elemento{issues.length > 1 ? "s" : ""} no se pudo crear:
+          </p>
+          {issues.map((it, i) => (
+            <div key={i} className="space-y-0.5">
+              <p className="text-[11px] text-muted-foreground">
+                {STEP_LABEL[it.step] ?? it.step}: <span className="font-medium text-foreground">{it.name}</span>
+                {it.sourceId ? <span className="font-mono"> · {it.sourceId}</span> : null}
               </p>
-              {issues.map((it, i) => (
-                <div key={i} className="space-y-0.5">
-                  <p className="text-[11px] text-muted-foreground">
-                    {STEP_LABEL[it.step] ?? it.step}: <span className="font-medium text-foreground">{it.name}</span>
-                    {it.sourceId ? <span className="font-mono"> · {it.sourceId}</span> : null}
-                  </p>
-                  <ErrorDetails info={it.error} variant="warning" compact />
-                </div>
-              ))}
+              <ErrorDetails info={it.error} variant="warning" compact />
             </div>
-          )}
-
-          {newCampaignId && (
-            <div className="flex items-center gap-3 flex-wrap text-xs">
-              {newCampaignId && accountId && (
-                <a
-                  href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${accountId}&selected_campaign_ids=${newCampaignId}`}
-                  target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-primary hover:underline"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <ExternalLink className="h-3 w-3" /> Ver copia en Ads Manager
-                </a>
-              )}
-            </div>
-          )}
-
-          {logs.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic">Sin logs</p>
-          ) : (
-            <div className="font-mono text-[11px] space-y-0.5 max-h-60 overflow-y-auto">
-              {logs.map((l, i) => (
-                <div key={i} className="flex gap-3">
-                  <span className="text-muted-foreground/60 shrink-0 tabular-nums">
-                    {new Date(l.ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                  </span>
-                  <span className={l.msg.startsWith("ERROR") ? "text-red-600" : l.msg.startsWith("PAUSA") ? "text-amber-700" : "text-foreground"}>{l.msg}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="text-[10px] text-muted-foreground/60 font-mono">
-            ID: {job.id}{batch ? ` · lote ${batch.id}` : ""}
-          </div>
+          ))}
         </div>
       )}
 
-      <Dialog open={confirmOpen} onOpenChange={(v) => !acting && setConfirmOpen(v)}>
-        <DialogContent className="sm:max-w-md" onClick={(e) => e.stopPropagation()}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {isActive
-                ? <><Ban className="h-4 w-4 text-red-600" /> Cancelar trabajo</>
-                : <><Trash2 className="h-4 w-4 text-red-600" /> Eliminar trabajo</>}
-            </DialogTitle>
-            <DialogDescription>
-              {isActive
-                ? "Se detendrá el trabajo en curso. Lo ya creado en Meta (campaña, adsets, ads) no se borra."
-                : "Se quitará este trabajo del historial. No afecta nada en Meta."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-            <span className="text-muted-foreground">{TYPE_LABELS[job.type] ?? job.type}: </span>
-            <span className="font-medium">{info.subject}</span>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={acting}>
-              Volver
-            </Button>
-            <Button
-              className="bg-red-600 hover:bg-red-700 text-white"
-              onClick={doAction} disabled={acting}
-            >
-              {acting
-                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> {isActive ? "Cancelando…" : "Eliminando…"}</>
-                : isActive ? "Sí, cancelar" : "Sí, eliminar"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs">
+        <span className="text-muted-foreground">{times.join(" · ")}</span>
+        {newCampaignId && accountId && (
+          <a
+            href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${accountId}&selected_campaign_ids=${newCampaignId}`}
+            target="_blank" rel="noreferrer"
+            className="inline-flex items-center gap-1 text-primary hover:underline"
+          >
+            <ExternalLink className="h-3 w-3" /> Ver copia en Ads Manager
+          </a>
+        )}
+        {!isActive && (
+          <button type="button" onClick={remove} disabled={deleting} className="ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-danger disabled:opacity-50">
+            <Trash2 className="h-3 w-3" /> Quitar del historial
+          </button>
+        )}
+      </div>
+
+      {logs.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">Sin registro de actividad</p>
+      ) : (
+        <div className="font-mono text-[11px] space-y-0.5 max-h-48 overflow-y-auto">
+          {logs.map((l, i) => (
+            <div key={i} className="flex gap-3">
+              <span className="text-muted-foreground shrink-0 tabular-nums">
+                {new Date(l.ts).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </span>
+              <span className={l.msg.startsWith("ERROR") ? "text-danger" : l.msg.startsWith("PAUSA") ? "text-warning" : "text-foreground"}>{l.msg}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-[10px] text-muted-foreground font-mono">ID: {job.id}</p>
     </div>
   );
 }
 
-// ─── Grupo ────────────────────────────────────────────────────────────────────
-// Una tanda se ve como una sola tarjeta: lo que importa es qué se hizo, cuánto
-// va y qué falló. Sirve para los lotes y para los envíos seguidos de ad sets.
+/** Una copia dentro de un grupo. */
+function ChildRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const info = describeGroup(kindOf(job.type), [job]);
+  const seq = job.input?.seq != null && Number(job.input?.total) > 1 ? `${job.input.seq}/${job.input.total}` : null;
+  return (
+    <div className="rounded-md border bg-card">
+      <button type="button" onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50">
+        {STATUS_ICONS[job.status] ?? <Clock className="h-4 w-4" />}
+        {seq && <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{seq}</span>}
+        <span className="flex-1 truncate text-xs font-medium" title={info.subject}>{info.subject}</span>
+        {info.result && <span className="shrink-0 text-[11px] text-muted-foreground">{info.result}</span>}
+        {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+      </button>
+      {job.status === "failed" && !open && job.error && (
+        <p className="truncate px-3 pb-2 text-[11px] text-danger" title={job.error}>{job.error}</p>
+      )}
+      {open && <div className="border-t p-3"><JobDetail job={job} onChanged={onChanged} /></div>}
+    </div>
+  );
+}
 
-/** Barra por colores: verde listas, rojo error, gris canceladas, azul en curso. */
-function StatusBar({ counts, total, compact }: {
-  counts: { completed: number; failed: number; cancelled: number; processing: number }; total: number; compact: boolean;
+// ─── Fila ─────────────────────────────────────────────────────────────────────
+
+const COLUMNS = "lg:grid-cols-[104px_minmax(0,1fr)_128px_128px_84px_92px_20px]";
+
+function ProgressBar({ counts, total }: {
+  counts: { completed: number; failed: number; cancelled: number; processing: number }; total: number;
 }) {
   const parts: Array<[number, string]> = [
-    [counts.completed, "bg-green-500"], [counts.failed, "bg-red-500"],
-    [counts.cancelled, "bg-slate-400"], [counts.processing, "bg-blue-500"],
+    [counts.completed, "bg-success"], [counts.failed, "bg-danger"],
+    [counts.cancelled, "bg-muted-foreground/50"], [counts.processing, "bg-info"],
   ];
-  const finished = counts.completed + counts.failed + counts.cancelled;
   return (
-    <div className={compact ? "w-16" : "w-28"}>
-      <div className="flex h-1.5 overflow-hidden rounded-full bg-muted">
-        {parts.map(([n, color]) => n > 0 && <div key={color} className={color} style={{ width: `${(n / Math.max(1, total)) * 100}%` }} />)}
-      </div>
-      <span className="text-[10px] text-muted-foreground">{finished}/{total}</span>
+    <div className="flex h-1.5 w-28 shrink-0 overflow-hidden rounded-full bg-muted" aria-hidden>
+      {parts.map(([n, color]) => n > 0 && <div key={color} className={color} style={{ width: `${(n / Math.max(1, total)) * 100}%` }} />)}
     </div>
   );
 }
 
-function GroupCard({ group, visible, onChanged, compact }: {
-  group: JobGroup<Job>; visible?: (job: Job) => boolean; onChanged: () => void; compact: boolean;
+function JobEntry({ group, tab, now, onChanged, compact }: {
+  group: JobGroup<Job>; tab: JobTab; now: number; onChanged: () => void; compact: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const { jobs, kind, batchId } = group;
-
-  // Los contadores miran el grupo completo; el filtro solo decide qué filas se despliegan.
   const info = describeGroup(kind, jobs);
+  const status = statusOf(info);
   const { counts, active } = info;
   const total = Number(jobs[0]?.input?.total) || jobs.length;
-  const withIssues = jobs.filter(j => j.status === "completed" && issuesOf(j).length > 0).length;
-  const ordered = jobs
-    .filter(j => !visible || visible(j))
-    .sort((a, b) => Number(a.input?.seq ?? 0) - Number(b.input?.seq ?? 0) || a.createdAt.localeCompare(b.createdAt));
+  const single = jobs.length === 1;
+  const Kind = KIND[kind];
+  const finished = counts.completed + counts.failed + counts.cancelled;
+  const account = shortAccount(info.account);
 
-  // Por qué falló, sin repetir: normalmente todas caen por lo mismo.
-  const errorTitles = [...new Set(jobs
-    .filter(j => j.status === "failed")
-    .map(j => (j.output?.error as ErrorInfo | undefined)?.title ?? j.error ?? "Error"))];
-  const limited = jobs.map(j => (j.status === "pending" ? waitingOf(j) : null)).find(w => w && /Meta/.test(w.reason));
+  // En «Con error» el grupo se despliega mostrando solo lo que falló.
+  const children = jobs
+    .filter(j => tab !== "failed" || j.status === "failed")
+    .sort((a, b) => Number(a.input?.seq ?? 0) - Number(b.input?.seq ?? 0) || a.createdAt.localeCompare(b.createdAt));
 
   async function cancel(e: React.MouseEvent) {
     e.stopPropagation();
-    if (!confirm(`¿Cancelar lo pendiente de este grupo (${active} de ${jobs.length})? Lo ya creado en Meta no se borra.`)) return;
+    if (!confirm(`¿Cancelar ${active} trabajo${active > 1 ? "s" : ""} pendiente${active > 1 ? "s" : ""}? Lo ya creado en Meta no se borra.`)) return;
     setCancelling(true);
     try {
       const pending = jobs.filter(j => j.status === "pending" || j.status === "processing");
       const responses = batchId
         ? [await fetch(`/api/jobs?batchId=${batchId}`, { method: "DELETE" })]
         : await Promise.all(pending.map(j => fetch(`/api/jobs/${j.id}`, { method: "DELETE" })));
-      const failedRes = responses.find(r => !r.ok);
-      if (failedRes) { toastApiError(await failedRes.json().catch(() => ({})), "No se pudo cancelar"); return; }
-      toast.success(`${pending.length} trabajo(s) cancelados`);
+      const bad = responses.find(r => !r.ok);
+      if (bad) { toastApiError(await bad.json().catch(() => ({})), "No se pudo cancelar"); return; }
+      toast.success(`${pending.length} trabajo${pending.length > 1 ? "s" : ""} cancelado${pending.length > 1 ? "s" : ""}`);
       onChanged();
     } catch {
       toast.error("No se pudo conectar con el servidor");
@@ -416,77 +247,123 @@ function GroupCard({ group, visible, onChanged, compact }: {
     }
   }
 
-  const StatusIcon = active > 0 ? Loader2 : counts.failed > 0 ? XCircle : CheckCircle2;
-  const iconClass = active > 0 ? "text-blue-500 animate-spin" : counts.failed > 0 ? "text-red-500" : "text-green-600";
+  const hasNote = active > 0 || info.errors.length > 0;
 
   return (
-    <div className={`border rounded-lg bg-white ${active > 0 ? "border-blue-200 shadow-sm" : "border-border"}`}>
-      <div className={`flex items-center cursor-pointer hover:bg-muted/20 transition-colors flex-wrap sm:flex-nowrap ${compact ? "gap-2 px-3 py-2" : "gap-3 px-4 py-3"}`} onClick={() => setOpen(o => !o)}>
-        <StatusIcon className={`h-4 w-4 shrink-0 ${iconClass}`} />
-        <div className="flex-1 min-w-0 basis-[calc(100%-1.75rem)] sm:basis-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <KindTag kind={kind} />
-            <span className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`} title={info.subject}>{info.subject}</span>
-          </div>
-          <div className="flex items-center gap-x-3 gap-y-0.5 mt-0.5 flex-wrap text-[11px]">
-            <span className={`font-medium ${counts.failed === 0 && active === 0 && counts.cancelled === 0 ? "text-green-700" : "text-foreground"}`}>{info.result}</span>
-            {counts.failed > 0 && <span className="text-red-600">{counts.failed} con error</span>}
-            {counts.processing > 0 && <span className="text-blue-600">{counts.processing} en curso</span>}
-            {counts.pending > 0 && <span className="text-muted-foreground">{counts.pending} en cola</span>}
-            {counts.cancelled > 0 && <span className="text-muted-foreground">{counts.cancelled} cancelada{counts.cancelled > 1 ? "s" : ""}</span>}
-            {withIssues > 0 && (
-              <span className="inline-flex items-center gap-1 text-amber-700">
-                <AlertTriangle className="h-3 w-3" /> {withIssues} con avisos
-              </span>
-            )}
-            <MetaLine info={info} />
-          </div>
-          {limited && <div className="mt-0.5"><WaitingNote reason={limited.reason} until={limited.until} /></div>}
-          {errorTitles.map(t => (
-            <p key={t} className="mt-0.5 text-[11px] text-red-600 truncate" title={t}>{t}</p>
-          ))}
+    <div className={compact ? "rounded-md border bg-card" : "border-b last:border-b-0"}>
+      <div
+        role="button" tabIndex={0} aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(o => !o); } }}
+        className={`cursor-pointer transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none ${compact ? "px-3 py-2" : "px-4 py-2.5"}`}
+      >
+        <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 ${compact ? "" : `lg:grid lg:gap-x-3 ${COLUMNS}`}`}>
+          <span className={`inline-flex w-fit items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${TONE[status.tone]}`}>
+            {status.tone === "info" && <Loader2 className="h-3 w-3 animate-spin" />}
+            {status.label}
+          </span>
+
+          <span className={`flex min-w-0 items-center gap-1.5 w-full order-first ${compact ? "" : "lg:order-none lg:w-auto"}`}>
+            <Kind.icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="shrink-0 text-xs text-muted-foreground">{Kind.label}</span>
+            <span className="text-xs text-muted-foreground" aria-hidden>·</span>
+            <span className="truncate text-sm font-medium" title={info.subject}>{info.subject}</span>
+          </span>
+
+          <span className="text-sm font-medium tabular-nums">{info.result}</span>
+          <span className="truncate text-xs text-muted-foreground" title={info.account ?? ""}>{account}</span>
+          <span className="truncate text-xs text-muted-foreground">{info.person}</span>
+          <span className="text-xs text-muted-foreground" title={info.createdAt ? fmtDate(info.createdAt) : ""}>{timeAgo(info.createdAt, now)}</span>
+          {open
+            ? <ChevronDown className={`ml-auto h-4 w-4 text-muted-foreground ${compact ? "" : "lg:ml-0"}`} aria-hidden />
+            : <ChevronRight className={`ml-auto h-4 w-4 text-muted-foreground ${compact ? "" : "lg:ml-0"}`} aria-hidden />}
         </div>
 
-        <div className="flex items-center gap-3 shrink-0 w-full justify-end sm:w-auto">
-          <StatusBar counts={counts} total={total} compact={compact} />
-          {active > 0 && (
-            <Button variant="ghost" size="sm" className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={cancel} disabled={cancelling}>
-              {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
-              <span className="ml-1 text-xs">{compact ? "Cancelar" : "Cancelar todo"}</span>
-            </Button>
-          )}
-          {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-        </div>
+        {/* Solo aparece si hay algo que seguir o resolver */}
+        {hasNote && (
+          <div className={`mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 ${compact ? "" : "lg:pl-[116px]"}`}>
+            {active > 0 && (
+              <>
+                <ProgressBar counts={counts} total={total} />
+                <span className="text-xs text-muted-foreground">{finished} de {total} listos</span>
+              </>
+            )}
+            {info.waiting && <WaitingNote reason={info.waiting.reason} until={info.waiting.until} />}
+            {info.errors.map(t => <span key={t} className="max-w-full truncate text-xs text-danger" title={t}>{t}</span>)}
+            {active > 0 && (
+              <Button variant="ghost" size="sm" className="ml-auto h-7 px-2 text-danger hover:bg-danger-soft hover:text-danger" onClick={cancel} disabled={cancelling}>
+                {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
+                <span className="ml-1 text-xs">Cancelar</span>
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {open && (
-        <div className="border-t p-3 bg-muted/10 space-y-2">
-          {ordered.map(j => <JobRow key={j.id} job={j} onChanged={onChanged} compact={compact} nested />)}
+        <div className="space-y-2 border-t bg-muted/30 p-3">
+          {single
+            ? <JobDetail job={jobs[0]} onChanged={onChanged} />
+            : children.map(j => <ChildRow key={j.id} job={j} onChanged={onChanged} />)}
         </div>
       )}
     </div>
   );
 }
 
-// ─── Secciones ────────────────────────────────────────────────────────────────
+// ─── Lista ────────────────────────────────────────────────────────────────────
 
-/** Lista de Trabajos: lo que pide atención arriba y el historial por día. */
-export function JobSections({ groups, now, visible, onChanged, compact = false }: {
-  groups: JobGroup<Job>[]; now: number; visible?: (job: Job) => boolean; onChanged: () => void; compact?: boolean;
+const TAB_LABEL: Record<JobTab, string> = { active: "Activos", failed: "Con error", history: "Historial" };
+const EMPTY: Record<JobTab, string> = {
+  active: "No hay trabajos en curso",
+  failed: "Sin errores en los últimos 7 días",
+  history: "Todavía no hay trabajos terminados",
+};
+
+/** Pestañas compartidas por la página y el panel flotante. */
+export function JobTabs({ tab, onChange, counts, withHistory = true }: {
+  tab: JobTab; onChange: (tab: JobTab) => void; counts: { active: number; failed: number }; withHistory?: boolean;
 }) {
+  const items: JobTab[] = withHistory ? ["active", "failed", "history"] : ["active", "failed"];
   return (
-    <>
-      {sectionize(groups, now).map(section => (
-        <section key={section.key} className="space-y-2">
-          <h3 className={`flex items-center gap-2 pt-1 text-xs font-semibold ${section.tone === "error" ? "text-red-600" : section.tone === "active" ? "text-blue-600" : "text-muted-foreground"}`}>
-            {section.label} <span className="font-normal">({section.groups.length})</span>
-            <span className="h-px flex-1 bg-border" />
-          </h3>
-          {section.groups.map(g => g.jobs.length > 1
-            ? <GroupCard key={g.key} group={g} visible={visible} onChanged={onChanged} compact={compact} />
-            : <JobRow key={g.key} job={g.jobs[0]} onChanged={onChanged} compact={compact} />)}
-        </section>
-      ))}
-    </>
+    <div className="flex items-center gap-1 text-xs" role="tablist">
+      {items.map(id => {
+        const count = id === "active" ? counts.active : id === "failed" ? counts.failed : null;
+        return (
+          <button
+            key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => onChange(id)}
+            className={`rounded px-2.5 py-1 transition-colors ${tab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+          >
+            {TAB_LABEL[id]}{count != null ? ` (${count})` : ""}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function JobList({ groups, tab, now, onChanged, compact = false }: {
+  groups: JobGroup<Job>[]; tab: JobTab; now: number; onChanged: () => void; compact?: boolean;
+}) {
+  if (groups.length === 0) {
+    return <p className="py-10 text-center text-sm text-muted-foreground">{EMPTY[tab]}</p>;
+  }
+
+  const rows = groups.map(g => <JobEntry key={g.key} group={g} tab={tab} now={now} onChanged={onChanged} compact={compact} />);
+  if (compact) return <div className="space-y-2">{rows}</div>;
+
+  return (
+    <div className="overflow-hidden rounded-lg border bg-card">
+      <div className={`hidden border-b bg-muted/40 px-4 py-2 text-[10px] font-semibold tracking-wide text-muted-foreground lg:grid lg:gap-x-3 ${COLUMNS}`}>
+        <span>ESTADO</span>
+        <span>QUÉ SE HIZO</span>
+        <span>RESULTADO</span>
+        <span>CUENTA</span>
+        <span>QUIÉN</span>
+        <span>CUÁNDO</span>
+        <span />
+      </div>
+      {rows}
+    </div>
   );
 }

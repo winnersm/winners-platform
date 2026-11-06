@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getAdSets, type MetaAdSet } from "@/lib/meta-api";
 import { getActiveOperationId } from "@/lib/operation";
-import { readSnapshotWithAge } from "@/lib/listing-sync";
+import { readSnapshotWithAge, saveListingSnapshot } from "@/lib/listing-sync";
 import { errorResponse } from "@/lib/api-error";
 import { serializeError, userLine } from "@/lib/meta-errors";
 
@@ -32,6 +32,8 @@ export async function GET(req: NextRequest) {
     }
     try {
       const adsets = await getAdSets(accountId, campaignId ?? undefined, bmId, op, { force: refresh });
+      // Lectura completa de la cuenta pedida a mano: pasa a ser la copia vigente.
+      if (refresh && op && !campaignId) await saveListingSnapshot(op, accountId, "adsets", "", adsets);
       return NextResponse.json({ adsets, syncedAt: new Date(), source: "meta" });
     } catch (e) {
       if (!snap) throw e;

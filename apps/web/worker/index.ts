@@ -80,7 +80,7 @@ async function processSyncJob(bullJob: BullJob) {
       return syncAllDashboards();
     case JOB_TYPES.SYNC_LISTINGS:
       console.log("[worker] SYNC_LISTINGS: sincronizando listados de todas las operaciones...");
-      return syncAllListings();
+      return syncAllListings((bullJob.data as { scope?: "light" | "deep" } | undefined)?.scope ?? "light");
     case JOB_TYPES.SYNC_FANPAGES:
       console.log("[worker] SYNC_FANPAGES: sincronizando fanpages de todas las operaciones...");
       return syncAllFanpages();
@@ -88,9 +88,9 @@ async function processSyncJob(bullJob: BullJob) {
       console.log("[worker] SYNC_SPEND_DAILY: acumulando gasto diario de todas las operaciones...");
       return syncAllSpendDaily();
     case JOB_TYPES.SYNC_LISTINGS_ACCOUNT: {
-      const { operationId, accountId, bmId } = bullJob.data as { operationId: string; accountId: string; bmId: string };
-      console.log(`[worker] SYNC_LISTINGS_ACCOUNT: cuenta ${accountId} (op ${operationId})`);
-      return syncListingsForAccount(operationId, { id: accountId, bmId }, undefined, { force: true });
+      const { operationId, accountId, bmId, scope } = bullJob.data as { operationId: string; accountId: string; bmId: string; scope?: "light" | "deep" | "all" };
+      console.log(`[worker] SYNC_LISTINGS_ACCOUNT: cuenta ${accountId} (op ${operationId}, ${scope ?? "all"})`);
+      return syncListingsForAccount(operationId, { id: accountId, bmId }, undefined, { force: true, scope: scope ?? "all" });
     }
   }
 }
@@ -336,13 +336,16 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     const opts = { removeOnComplete: true, removeOnFail: true };
     // Los schedulers con `every` ya lanzan una pasada inmediata al crearse/actualizarse.
     await syncQueue.upsertJobScheduler("sync-dashboard", { every: 20 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, opts });
-    // Listados (campañas/adsets/ads/insights): cada 30 min.
-    await syncQueue.upsertJobScheduler("sync-listings", { every: 30 * 60 * 1000 }, { name: JOB_TYPES.SYNC_LISTINGS, opts });
+    // Listados ligeros (campañas + métricas de campaña): cada 30 min.
+    await syncQueue.upsertJobScheduler("sync-listings", { every: 30 * 60 * 1000 }, { name: JOB_TYPES.SYNC_LISTINGS, data: { scope: "light" }, opts });
+    // Ad sets y anuncios (+ sus métricas): ~300 llamadas que casi nadie abre → cada 6 h.
+    // «Sincronizar con Meta» en la UI cubre lo urgente.
+    await syncQueue.upsertJobScheduler("sync-listings-deep", { every: 6 * 60 * 60 * 1000 }, { name: JOB_TYPES.SYNC_LISTINGS, data: { scope: "deep" }, opts });
     // Fanpages: una vez al día a las 5:00 AM (hora Colombia); el botón "Sincronizar" cubre lo urgente.
     await syncQueue.upsertJobScheduler("sync-fanpages", { pattern: "0 5 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_FANPAGES, opts });
     // Gasto diario: 6:00 AM (hora Colombia). Reescribe los últimos días para captar ajustes tardíos de Meta.
     await syncQueue.upsertJobScheduler("sync-spend-daily", { pattern: "0 6 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_SPEND_DAILY, opts });
-    console.log("[worker] Sync programado: dashboard (20 min) + listados (30 min) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
+    console.log("[worker] Sync programado: dashboard (20 min) + campañas (30 min) + ad sets/anuncios (6 h) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
   } catch (e) {
     console.error("[worker] No se pudo programar los syncs:", e);
   }

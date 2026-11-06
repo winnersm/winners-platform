@@ -217,7 +217,7 @@ function ProfitCell({ v, loading, currency }: { v: number | null; loading: boole
   const val = v ?? 0;
   if (val === 0) return <span className="text-xs tabular-nums text-muted-foreground/60">{fmtC(0, currency)}</span>;
   const pos = val > 0;
-  return <span className={`text-xs tabular-nums font-medium ${pos ? "text-green-700" : "text-red-600"}`}>
+  return <span className={`text-xs tabular-nums font-medium ${pos ? "text-success" : "text-danger"}`}>
     {pos ? "" : "-"}{fmtC(Math.abs(val), currency)}
   </span>;
 }
@@ -226,7 +226,7 @@ function RoiCell({ v, loading }: { v: number | null; loading: boolean }) {
   const val = v ?? 0;
   if (val === 0) return <span className="text-xs tabular-nums text-muted-foreground/60">0%</span>;
   const pos = val > 0;
-  return <span className={`text-xs tabular-nums font-medium ${pos ? "text-green-700" : "text-red-600"}`}>
+  return <span className={`text-xs tabular-nums font-medium ${pos ? "text-success" : "text-danger"}`}>
     {val.toFixed(0)}%
   </span>;
 }
@@ -293,7 +293,7 @@ function ColumnPicker({ state }: { state: ReturnType<typeof useColumns> }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={
-        <Button variant="outline" size="sm" className="h-8 text-xs bg-white">
+        <Button variant="outline" size="sm" className="h-8 text-xs bg-card">
           <Columns3 className="h-3.5 w-3.5 mr-1" /> Columnas ({state.columns.length}/{COLUMNS.length})
         </Button>
       } />
@@ -431,17 +431,17 @@ function SelectionBar({
   };
   return (
     <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 mb-2 flex-wrap">
-      <span className="text-xs font-medium">{count} {noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-amber-700"> · {hidden} fuera del filtro actual</span> : null}</span>
+      <span className="text-xs font-medium">{count} {noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-warning"> · {hidden} fuera del filtro actual</span> : null}</span>
       <div className="flex items-center gap-1.5 ml-auto flex-wrap">
         {onDuplicate && (
           <Button size="sm" className="h-7 text-xs" onClick={onDuplicate} disabled={busy}>
             <Copy className="h-3.5 w-3.5 mr-1" /> Duplicar
           </Button>
         )}
-        <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={() => onStatus("PAUSED")} disabled={busy}>
+        <Button size="sm" variant="outline" className="h-7 text-xs bg-card" onClick={() => onStatus("PAUSED")} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Pause className="h-3.5 w-3.5 mr-1" />} Pausar
         </Button>
-        <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={activate} disabled={busy}>
+        <Button size="sm" variant="outline" className="h-7 text-xs bg-card" onClick={activate} disabled={busy}>
           <Play className="h-3.5 w-3.5 mr-1" /> Activar
         </Button>
         <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onClear} disabled={busy}>
@@ -452,23 +452,34 @@ function SelectionBar({
   );
 }
 
-/** Indicador de frescura + botón «Traer de Meta». */
-function FreshnessBar({ freshness, now, loading, onRefresh }: {
-  freshness: Freshness; now: number; loading: boolean; onRefresh: () => void;
+/**
+ * Indicador de frescura con «latido» + botón «Sincronizar con Meta».
+ * `everyMin` = cada cuánto sincroniza el servidor este nivel (30 min campañas, 360 min ad sets/anuncios).
+ * El latido es verde mientras la copia es reciente, ámbar al pasar de 1× el intervalo y rojo al pasar de 2×.
+ */
+function FreshnessBar({ freshness, now, loading, onRefresh, everyMin = 30 }: {
+  freshness: Freshness; now: number; loading: boolean; onRefresh: () => void; everyMin?: number;
 }) {
   const label = freshness.source === "meta" ? "de Meta" : freshness.source === "cache" ? "en caché" : "copia guardada";
-  const old = freshness.syncedAt ? now - new Date(freshness.syncedAt).getTime() > 45 * 60_000 : false;
+  const ageMin = freshness.syncedAt ? (now - new Date(freshness.syncedAt).getTime()) / 60_000 : 0;
+  const state = ageMin > everyMin * 2 ? "bad" : ageMin > everyMin * 1.2 ? "warn" : "ok";
+  const dot = state === "bad" ? "bg-red-500" : state === "warn" ? "bg-amber-500" : "bg-emerald-500";
+  const text = state === "bad" ? "text-red-500" : state === "warn" ? "text-warning" : "text-muted-foreground";
   return (
     <div className="flex items-center gap-2">
       {freshness.syncedAt && (
-        <span className={`text-[11px] ${old ? "text-amber-700" : "text-muted-foreground"}`} title={new Date(freshness.syncedAt).toLocaleString("es-CO")}>
+        <span className={`inline-flex items-center gap-1.5 text-[11px] ${text}`} title={new Date(freshness.syncedAt).toLocaleString("es-CO")}>
+          <span className="relative flex h-2 w-2" aria-hidden>
+            <span className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${loading ? "bg-primary" : dot}`} style={{ animationDuration: state === "ok" ? "2.4s" : "1.2s" }} />
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${loading ? "bg-primary" : dot}`} />
+          </span>
           Actualizado {ago(freshness.syncedAt, now)} · {label}
         </span>
       )}
-      <Button variant="outline" size="sm" className="h-7 px-2 text-xs bg-white" onClick={onRefresh} disabled={loading}
-        title="Pide los datos a Meta ahora, sin usar copias guardadas">
+      <Button variant="outline" size="sm" className="h-7 px-2 text-xs bg-card" onClick={onRefresh} disabled={loading}
+        title="Pide los datos a Meta ahora, sin usar copias guardadas. El servidor los actualiza solo cada 30 min (campañas) o 6 h (ad sets y anuncios).">
         {loading ? <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5 mr-1" />}
-        Traer de Meta
+        Sincronizar con Meta
       </Button>
     </div>
   );
@@ -527,17 +538,17 @@ function BatchBanner({ batch, onDismiss, onOpenJobs }: { batch: BatchState | nul
   const finished = batch.done + batch.failed >= batch.total;
   const pct = Math.round(((batch.done + batch.failed) / Math.max(1, batch.total)) * 100);
   return (
-    <div className={`flex items-center gap-3 rounded-md border px-3 py-2 mb-2 text-xs ${finished ? (batch.failed ? "border-amber-300 bg-amber-50" : "border-green-300 bg-green-50") : "border-blue-200 bg-blue-50"}`}>
+    <div className={`flex items-center gap-3 rounded-md border px-3 py-2 mb-2 text-xs ${finished ? (batch.failed ? "border-warning/40 bg-warning-soft" : "border-success/40 bg-success-soft") : "border-info/40 bg-info-soft"}`}>
       {finished
-        ? (batch.failed ? <AlertTriangle className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />)
-        : <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+        ? (batch.failed ? <AlertTriangle className="h-4 w-4 text-warning" /> : <CheckCircle2 className="h-4 w-4 text-success" />)
+        : <Loader2 className="h-4 w-4 animate-spin text-info" />}
       <span className="font-medium">
         {finished ? "Duplicación terminada" : "Duplicando"}: {batch.done}/{batch.total} creadas
         {batch.failed ? ` · ${batch.failed} con error` : ""}{batch.withIssues ? ` · ${batch.withIssues} con avisos` : ""}
       </span>
       {!finished && (
-        <div className="h-1.5 w-28 bg-white rounded-full overflow-hidden">
-          <div className="h-full bg-blue-500 transition-all" style={{ width: `${pct}%` }} />
+        <div className="h-1.5 w-28 bg-card rounded-full overflow-hidden">
+          <div className="h-full bg-info transition-all" style={{ width: `${pct}%` }} />
         </div>
       )}
       <button className="ml-auto text-primary hover:underline" onClick={onOpenJobs}>Ver trabajos</button>
@@ -1028,7 +1039,7 @@ function ManagerInner() {
             if (a) router.push(`/meta/campaigns?accountId=${a.id.replace("act_", "")}&bmId=${a.bmId}`);
           }}
         >
-          <SelectTrigger className="h-7 min-w-44 max-w-72 text-sm font-semibold bg-white" aria-label="Cambiar de cuenta">
+          <SelectTrigger className="h-7 min-w-44 max-w-72 text-sm font-semibold bg-card" aria-label="Cambiar de cuenta">
             <SelectValue>{accountName || "Cuenta"}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -1042,7 +1053,7 @@ function ManagerInner() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-0 border-b bg-white -mx-5 px-5">
+      <div className="flex items-center gap-0 border-b bg-card -mx-5 px-5">
         {tabBtn("campaign", "Campañas", level === "campaign", goToCampaigns)}
         {tabBtn("adset", adsetTabLabel, level === "adset", goToAdsets)}
         {tabBtn("ad", adTabLabel, level === "ad", goToAds)}
@@ -1057,7 +1068,7 @@ function ManagerInner() {
               {DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}
             </SelectContent>
           </Select>
-          <FreshnessBar freshness={freshness} now={now} loading={loadingData || loadingInsights} onRefresh={refreshFromMeta} />
+          <FreshnessBar freshness={freshness} now={now} loading={loadingData || loadingInsights} onRefresh={refreshFromMeta} everyMin={level === "campaign" ? 30 : 360} />
         </div>
       </div>
 
@@ -1066,13 +1077,13 @@ function ManagerInner() {
         <div className="relative">
           <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
-            placeholder="Buscar..." className="pl-8 h-8 text-sm w-44 bg-white"
+            placeholder="Buscar..." className="pl-8 h-8 text-sm w-44 bg-card"
             value={nameFilter} onChange={e => setNameFilter(e.target.value)}
           />
         </div>
 
         <Select value={statusFilter} onValueChange={v => v && setStatusFilter(v)}>
-          <SelectTrigger className="h-8 w-32 text-xs bg-white">
+          <SelectTrigger className="h-8 w-32 text-xs bg-card">
             <SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -1129,7 +1140,7 @@ function ManagerInner() {
           {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded" />)}
         </div>
       ) : error && visIds.length === 0 ? null : (
-        <div className="rounded-lg border bg-white shadow-sm overflow-x-auto">
+        <div className="rounded-lg border bg-card shadow-sm overflow-x-auto">
           <Table className="w-full min-w-[1280px]">
             <TableHeader>
               <TableRow className="bg-muted/40 hover:bg-muted/40 border-b">
@@ -1518,17 +1529,17 @@ function GlobalCampaignsView() {
       <div className="flex items-center gap-2 pt-1 pb-2 flex-wrap">
         <div className="relative">
           <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input placeholder="Buscar campaña o cuenta..." className="pl-8 h-8 text-sm w-56 bg-white" value={query} onChange={e => setQuery(e.target.value)} />
+          <Input placeholder="Buscar campaña o cuenta..." className="pl-8 h-8 text-sm w-56 bg-card" value={query} onChange={e => setQuery(e.target.value)} />
         </div>
         <Select value={statusFilter} onValueChange={v => v && setStatusFilter(v)}>
-          <SelectTrigger className="h-8 w-32 text-xs bg-white"><SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue></SelectTrigger>
+          <SelectTrigger className="h-8 w-32 text-xs bg-card"><SelectValue>{labelOf(STATUS_OPTS, statusFilter)}</SelectValue></SelectTrigger>
           <SelectContent>{STATUS_OPTS.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}</SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground ml-1">
           {loading ? `${refreshing ? "Trayendo de Meta" : "Cargando"} ${done}/${total} cuentas…` : `${vis.length} campañas · ${total} cuentas`}
         </span>
         {problems.length > 0 && (
-          <button className="inline-flex items-center gap-1 text-xs text-amber-700 hover:underline" onClick={() => setShowProblems(s => !s)}>
+          <button className="inline-flex items-center gap-1 text-xs text-warning hover:underline" onClick={() => setShowProblems(s => !s)}>
             <AlertTriangle className="h-3.5 w-3.5" /> {problems.length} aviso{problems.length > 1 ? "s" : ""} de cuentas
           </button>
         )}
@@ -1552,7 +1563,7 @@ function GlobalCampaignsView() {
       <BatchBanner batch={tracker.batch} onDismiss={tracker.dismiss} onOpenJobs={openJobsDock} />
 
       {noRate.length > 0 && !loading && (
-        <p className="mb-2 text-xs text-amber-700">
+        <p className="mb-2 text-xs text-warning">
           Sin tasa de cambio para {noRate.join(", ")}: esas cuentas no se suman al total y van al final al ordenar por dinero.
         </p>
       )}
@@ -1564,7 +1575,7 @@ function GlobalCampaignsView() {
         onClear={() => setSelected(new Set())}
       />
 
-      <div className="rounded-lg border bg-white shadow-sm overflow-x-auto">
+      <div className="rounded-lg border bg-card shadow-sm overflow-x-auto">
         <Table className="w-full min-w-[1300px]">
           <TableHeader>
             <TableRow className="border-b">

@@ -181,7 +181,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
               ? <p key={i} className="text-muted-foreground">…</p>
               : <p key={i} className="truncate font-medium" title={renderCopyName(sample, n)}>{renderCopyName(sample, n)}</p>)}
             {!numbered && validCount > 1 && (
-              <p className="text-amber-700">Todas las copias tendrán el mismo nombre.</p>
+              <p className="text-warning">Todas las copias tendrán el mismo nombre.</p>
             )}
           </div>
 

@@ -5,17 +5,14 @@ import { RefreshCw, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { JobSections, STATUS_LABEL, type Job } from "@/components/job-list";
-import { groupJobs } from "@/lib/job-groups";
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
+import { JobList, JobTabs, type Job } from "@/components/job-list";
+import { groupJobs, splitByTab, tabCounts, type JobTab } from "@/lib/job-groups";
 
 export default function JobsView() {
-
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [chosenTab, setChosenTab] = useState<JobTab | null>(null);
   const [now, setNow] = useState(0);
 
   const load = useCallback(async () => {
@@ -40,8 +37,9 @@ export default function JobsView() {
     return () => clearInterval(timer);
   }, [jobs, load]);
 
-  const groups = groupJobs(jobs).filter(g => statusFilter === "all" || g.jobs.some(j => j.status === statusFilter));
-
+  const tabs = splitByTab(groupJobs(jobs), now);
+  // Sin elegir: lo que pide atención primero.
+  const tab: JobTab = chosenTab ?? (tabs.active.length ? "active" : tabs.failed.length ? "failed" : "history");
   const activeCount = jobs.filter(j => j.status === "pending" || j.status === "processing").length;
 
   return (
@@ -56,22 +54,9 @@ export default function JobsView() {
             </Badge>
           )}
         </div>
-
         <div className="flex items-center gap-2">
-          <div className="flex gap-1 flex-wrap text-xs">
-            {["all", "pending", "processing", "completed", "failed", "cancelled"].map(s => (
-              <button
-                key={s}
-                onClick={() => setStatusFilter(s)}
-                className={`px-2.5 py-1 rounded border transition-colors ${
-                  statusFilter === s ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:bg-muted/40"
-                }`}
-              >
-                {s === "all" ? "Todos" : STATUS_LABEL[s] ?? s}
-              </button>
-            ))}
-          </div>
-          <Button variant="ghost" size="sm" onClick={load}>
+          <JobTabs tab={tab} onChange={setChosenTab} counts={tabCounts(tabs)} />
+          <Button variant="ghost" size="sm" onClick={load} title="Actualizar">
             <RefreshCw className="h-4 w-4" />
           </Button>
         </div>
@@ -85,16 +70,10 @@ export default function JobsView() {
 
       {loading ? (
         <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-lg" />)}
-        </div>
-      ) : groups.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground text-sm">
-          {statusFilter === "all" ? "No hay trabajos todavía" : `No hay trabajos con estado «${STATUS_LABEL[statusFilter] ?? statusFilter}»`}
+          {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
         </div>
       ) : (
-        <div className="space-y-4">
-          <JobSections groups={groups} now={now} onChanged={load} visible={statusFilter === "all" ? undefined : j => j.status === statusFilter} />
-        </div>
+        <JobList groups={tabs[tab]} tab={tab} now={now} onChanged={load} />
       )}
     </div>
   );

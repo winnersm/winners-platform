@@ -74,14 +74,14 @@ export function ErrorDetails({
   const Icon = warn ? AlertTriangle : AlertCircle;
 
   return (
-    <div className={`rounded-md border text-sm ${warn ? "border-amber-300 bg-amber-50 text-amber-900" : "border-destructive/40 bg-destructive/5 text-destructive"} ${compact ? "p-2" : "p-3"}`}>
+    <div className={`rounded-md border text-sm ${warn ? "border-warning/40 bg-warning-soft text-warning" : "border-destructive/40 bg-destructive/5 text-destructive"} ${compact ? "p-2" : "p-3"}`}>
       <div className="flex items-start gap-2">
         <Icon className="h-4 w-4 shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1 space-y-0.5">
           <p className="font-medium">{title}</p>
-          {info?.message && <p className={`text-xs ${warn ? "text-amber-800" : "text-foreground/80"}`}>{info.message}</p>}
+          {info?.message && <p className={`text-xs ${warn ? "text-warning" : "text-foreground/80"}`}>{info.message}</p>}
           {info?.action && (
-            <p className={`text-xs ${warn ? "text-amber-800" : "text-foreground/80"}`}>
+            <p className={`text-xs ${warn ? "text-warning" : "text-foreground/80"}`}>
               <span className="font-medium">Qué hacer: </span>{info.action}
             </p>
           )}
@@ -96,7 +96,7 @@ export function ErrorDetails({
             </button>
           )}
           {open && (
-            <div className="mt-1 rounded border bg-white/70 p-2 font-mono text-[11px] text-foreground">
+            <div className="mt-1 rounded border bg-card p-2 font-mono text-[11px] text-foreground">
               <table className="w-full">
                 <tbody>
                   {rows.map(([k, v]) => (
@@ -128,7 +128,7 @@ export function WaitingNote({ reason, until }: { reason: string; until?: string 
   const [now] = useState(() => Date.now());
   const mins = until ? Math.max(0, Math.round((new Date(until).getTime() - now) / 60_000)) : null;
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
+    <span className="inline-flex items-center gap-1 text-[11px] text-warning">
       <Clock className="h-3 w-3" />
       {reason}{mins != null && mins > 0 && !/\bmin\b/.test(reason) ? ` (≈${mins} min)` : ""}
     </span>

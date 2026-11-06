@@ -9,6 +9,7 @@ out/
 build/
 *.tsbuildinfo
 .turbo/
+AGENTS.md
 
 # secretos — NUNCA versionar
 .env
