@@ -83,12 +83,14 @@ const labelOf = (opts: Array<{ value: string; label: string }>, value: string) =
 
 const ENTITY_STATUS: Record<string, string> = { ACTIVE: "Activo", PAUSED: "Pausado", ARCHIVED: "Archivado", DELETED: "Eliminado" };
 
-// Las acciones quedan siempre a la vista aunque la tabla se desplace en horizontal.
-const STICKY_ACTIONS = "md:sticky right-0 z-10 bg-card group-hover:bg-muted shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)]";
-// Casilla y nombre fijos a la izquierda. Solo en pantallas anchas: en móvil
-// ocuparían todo el ancho y no dejarían ver las métricas.
-const STICKY_CHECK = "w-8 min-w-8 max-w-8 xl:sticky xl:left-0 z-10 bg-card group-hover:bg-muted";
-const STICKY_NAME = "max-w-[280px] min-w-[240px] xl:sticky xl:left-8 z-10 bg-card group-hover:bg-muted xl:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)]";
+// Casilla, estado y acciones van a la izquierda, siempre a la vista aunque la tabla se desplace en
+// horizontal (salvo en móvil, donde taparían las métricas). Sus anchos son fijos porque el
+// `left` de cada columna fija depende de los de las anteriores.
+const STICKY_CHECK = "w-8 min-w-8 max-w-8 md:sticky md:left-0 z-10 bg-card group-hover:bg-muted";
+const STICKY_STATUS = "w-28 min-w-28 max-w-28 md:sticky md:left-8 z-10 bg-card group-hover:bg-muted";
+const STICKY_ACTIONS = "w-40 min-w-40 max-w-40 md:sticky md:left-36 z-10 bg-card group-hover:bg-muted md:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)] xl:shadow-none";
+// El nombre solo se fija en pantallas anchas: antes dejaría sin sitio a las métricas.
+const STICKY_NAME = "max-w-[280px] min-w-[240px] xl:sticky xl:left-76 z-10 bg-card group-hover:bg-muted xl:shadow-[6px_0_6px_-6px_rgba(0,0,0,0.15)]";
 
 function fmtBudget(cents?: string, currency = "USD") {
   if (!cents) return "—";
@@ -432,7 +434,7 @@ function SelectionBar({
   return (
     <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 mb-2 flex-wrap">
       <span className="text-xs font-medium">{count} {noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-warning"> · {hidden} fuera del filtro actual</span> : null}</span>
-      <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+      <div className="flex items-center gap-1.5 flex-wrap">
         {onDuplicate && (
           <Button size="sm" className="h-7 text-xs" onClick={onDuplicate} disabled={busy}>
             <Copy className="h-3.5 w-3.5 mr-1" /> Duplicar
@@ -1008,7 +1010,7 @@ function ManagerInner() {
 
   /** Botones visibles por fila. */
   const rowActions = (lvl: Level, id: string, extra?: React.ReactNode) => (
-    <div className="flex items-center justify-end gap-0.5" onClick={e => e.stopPropagation()}>
+    <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
       {extra}
       <a
         href={adsManagerUrl(lvl, accountId, id)} target="_blank" rel="noreferrer"
@@ -1147,6 +1149,8 @@ function ManagerInner() {
                 <TableHead className={`py-2 ${STICKY_CHECK}`}>
                   <Checkbox checked={allSel} indeterminate={someSel} onToggle={toggleAll} label="Seleccionar todo" />
                 </TableHead>
+                <TableHead className={`py-2 text-[10px] font-semibold ${STICKY_STATUS}`}>STATUS</TableHead>
+                <TableHead className={`py-2 text-[10px] font-semibold ${STICKY_ACTIONS}`}>ACCIONES</TableHead>
                 <TableHead
                   className={`py-2 text-[10px] font-semibold cursor-pointer select-none hover:text-foreground ${STICKY_NAME} ${sort?.key === "name" ? "text-primary" : ""}`}
                   onClick={() => toggleSort("name")}
@@ -1154,23 +1158,21 @@ function ManagerInner() {
                   NOMBRE{sort?.key === "name" ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
                 </TableHead>
                 {metricHeaders}
-                <TableHead className="py-2 text-[10px] font-semibold w-28">STATUS</TableHead>
                 {level !== "ad" && <TableHead className="py-2 text-[10px] font-semibold w-20">PRESUP.</TableHead>}
                 {level === "ad" && <TableHead className="py-2 text-[10px] font-semibold w-20">CREATIVE</TableHead>}
-                <TableHead className={`py-2 text-[10px] font-semibold w-36 min-w-36 text-right ${STICKY_ACTIONS}`}>ACCIONES</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {visRows.length > 0 && (
                 <TableRow className="group bg-muted hover:bg-muted font-semibold">
                   <TableCell className={`py-2 ${STICKY_CHECK} bg-muted`} />
+                  <TableCell className={`py-2 ${STICKY_STATUS} bg-muted`} />
+                  <TableCell className={`py-2 ${STICKY_ACTIONS} bg-muted`} />
                   <TableCell className={`py-2 text-xs ${STICKY_NAME} bg-muted`}>
                     Total · {visRows.length} {level === "campaign" ? "campañas" : level === "adset" ? "ad sets" : "anuncios"}
                   </TableCell>
                   <MetricCells metrics={totals} loading={loadingInsights} columns={columns} currency={currency} />
                   <TableCell className="py-2" />
-                  <TableCell className="py-2" />
-                  <TableCell className={`py-2 ${STICKY_ACTIONS} bg-muted`} />
                 </TableRow>
               )}
 
@@ -1189,16 +1191,9 @@ function ManagerInner() {
                       <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedCampaignIds.has(c.id)} onToggle={() => toggleOne(c.id)} label={`Seleccionar ${c.name}`} />
                       </TableCell>
-                      <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={c.name}>{c.name}</p>
-                      </TableCell>
-                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
-                      <TableCell className="py-2" onClick={e => e.stopPropagation()}>
+                      <TableCell className={`py-2 ${STICKY_STATUS}`} onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={c.id} status={c.status} entityType="campaign"
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
-                      </TableCell>
-                      <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtBudget(c.daily_budget ?? c.lifetime_budget, currency)}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("campaign", c.id, (
@@ -1212,6 +1207,13 @@ function ManagerInner() {
                             </Button>
                           </>
                         ))}
+                      </TableCell>
+                      <TableCell className={`py-2 ${STICKY_NAME}`}>
+                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={c.name}>{c.name}</p>
+                      </TableCell>
+                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
+                      <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
+                        {fmtBudget(c.daily_budget ?? c.lifetime_budget, currency)}
                       </TableCell>
                     </TableRow>
                   );
@@ -1233,16 +1235,9 @@ function ManagerInner() {
                       <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedAdsetIds.has(a.id)} onToggle={() => toggleOne(a.id)} label={`Seleccionar ${a.name}`} />
                       </TableCell>
-                      <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
-                      </TableCell>
-                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
-                      <TableCell className="py-2" onClick={e => e.stopPropagation()}>
+                      <TableCell className={`py-2 ${STICKY_STATUS}`} onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={a.id} status={a.status} entityType="adset"
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
-                      </TableCell>
-                      <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtBudget(a.daily_budget ?? a.lifetime_budget, currency)}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("adset", a.id, (
@@ -1256,6 +1251,13 @@ function ManagerInner() {
                             </Button>
                           </>
                         ))}
+                      </TableCell>
+                      <TableCell className={`py-2 ${STICKY_NAME}`}>
+                        <p className="font-medium text-xs leading-tight truncate group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
+                      </TableCell>
+                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
+                      <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
+                        {fmtBudget(a.daily_budget ?? a.lifetime_budget, currency)}
                       </TableCell>
                     </TableRow>
                   );
@@ -1277,16 +1279,9 @@ function ManagerInner() {
                       <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedAdIds.has(ad.id)} onToggle={() => toggleOne(ad.id)} label={`Seleccionar ${ad.name}`} />
                       </TableCell>
-                      <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight truncate" title={ad.name}>{ad.name}</p>
-                      </TableCell>
-                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
-                      <TableCell className="py-2" onClick={e => e.stopPropagation()}>
+                      <TableCell className={`py-2 ${STICKY_STATUS}`} onClick={e => e.stopPropagation()}>
                         <StatusCell entityId={ad.id} status={ad.status} entityType="ad"
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
-                      </TableCell>
-                      <TableCell className="py-2 text-[10px] text-muted-foreground font-mono truncate max-w-[80px]">
-                        {ad.creative_id ?? "—"}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
                         {rowActions("ad", ad.id, ad.creative_id ? (
@@ -1295,6 +1290,13 @@ function ManagerInner() {
                             <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
                           </Button>
                         ) : null)}
+                      </TableCell>
+                      <TableCell className={`py-2 ${STICKY_NAME}`}>
+                        <p className="font-medium text-xs leading-tight truncate" title={ad.name}>{ad.name}</p>
+                      </TableCell>
+                      <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
+                      <TableCell className="py-2 text-[10px] text-muted-foreground font-mono truncate max-w-[80px]">
+                        {ad.creative_id ?? "—"}
                       </TableCell>
                     </TableRow>
                   );
@@ -1583,17 +1585,19 @@ function GlobalCampaignsView() {
                 <Checkbox checked={allSel} indeterminate={someSel} label="Seleccionar todo"
                   onToggle={() => setSelected(allSel ? new Set() : new Set(visKeys))} />
               </TableHead>
+              <TableHead className={`py-2 text-[10px] font-semibold ${STICKY_STATUS}`}>STATUS</TableHead>
+              <TableHead className={`py-2 text-[10px] font-semibold ${STICKY_ACTIONS}`}>ACCIONES</TableHead>
               <TableHead className={`py-2 text-[10px] font-semibold cursor-pointer select-none hover:text-foreground ${STICKY_NAME} ${sort?.key === "name" ? "text-primary" : ""}`} onClick={() => toggleSort("name")}>NOMBRE{arrow("name")}</TableHead>
               <TableHead className={`py-2 text-[10px] font-semibold min-w-[140px] cursor-pointer select-none hover:text-foreground ${sort?.key === "account" ? "text-primary" : ""}`} onClick={() => toggleSort("account")}>CUENTA{arrow("account")}</TableHead>
               {columns.map(c => sh(c.key, c.label, c.w))}
-              <TableHead className="py-2 text-[10px] font-semibold w-20">STATUS</TableHead>
-              <TableHead className={`py-2 text-[10px] font-semibold w-36 min-w-36 text-right ${STICKY_ACTIONS}`}>ACCIONES</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {vis.length > 0 && (
               <TableRow className="group bg-muted hover:bg-muted font-semibold">
                 <TableCell className={`py-2 ${STICKY_CHECK} bg-muted`} />
+                <TableCell className={`py-2 ${STICKY_STATUS} bg-muted`} />
+                <TableCell className={`py-2 ${STICKY_ACTIONS} bg-muted`} />
                 <TableCell className={`py-2 text-xs ${STICKY_NAME} bg-muted`}>
                   Total · {vis.length} campañas
                 </TableCell>
@@ -1602,8 +1606,6 @@ function GlobalCampaignsView() {
                   {otherCurrencies.length > 0 ? "en USD aprox." : "USD"}
                 </TableCell>
                 <MetricCells metrics={totals} loading={false} columns={columns} currency="USD" />
-                <TableCell className="py-2" />
-                <TableCell className={`py-2 ${STICKY_ACTIONS} bg-muted`} />
               </TableRow>
             )}
             {vis.length === 0 ? (
@@ -1616,14 +1618,11 @@ function GlobalCampaignsView() {
                   <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, true)}`} onClick={e => e.stopPropagation()}>
                     <Checkbox checked={selected.has(k)} onToggle={() => toggleOne(k)} label={`Seleccionar ${r.camp.name}`} />
                   </TableCell>
-                  <TableCell className={`py-2 ${STICKY_NAME}`}><span className="block truncate text-xs font-medium group-hover:text-primary" title={r.camp.name}>{r.camp.name}</span></TableCell>
-                  <TableCell className="py-2"><span className="text-[11px] text-muted-foreground line-clamp-1">{r.accName}</span></TableCell>
-                  <MetricCells metrics={calcMetrics(ins)} loading={false} columns={columns} currency={r.currency ?? "USD"} />
-                  <TableCell className="py-2">
+                  <TableCell className={`py-2 ${STICKY_STATUS}`}>
                     <Badge variant={r.camp.status === "ACTIVE" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">{ENTITY_STATUS[r.camp.status] ?? r.camp.status}</Badge>
                   </TableCell>
                   <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
-                    <div className="flex items-center justify-end gap-0.5" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
                       <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" title="Duplicar campaña" onClick={() => setDupTargets([r])}>
                         <Copy className="h-3.5 w-3.5 mr-0.5" /> Duplicar
                       </Button>
@@ -1636,6 +1635,9 @@ function GlobalCampaignsView() {
                       </a>
                     </div>
                   </TableCell>
+                  <TableCell className={`py-2 ${STICKY_NAME}`}><span className="block truncate text-xs font-medium group-hover:text-primary" title={r.camp.name}>{r.camp.name}</span></TableCell>
+                  <TableCell className="py-2"><span className="text-[11px] text-muted-foreground line-clamp-1">{r.accName}</span></TableCell>
+                  <MetricCells metrics={calcMetrics(ins)} loading={false} columns={columns} currency={r.currency ?? "USD"} />
                 </TableRow>
               );
             })}

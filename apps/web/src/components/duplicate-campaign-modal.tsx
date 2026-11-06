@@ -141,7 +141,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Copy className="h-4 w-4" /> {single ? "Duplicar campaña" : `Duplicar ${campaigns.length} campañas`}
@@ -149,7 +149,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
           <DialogDescription className="text-xs space-y-1">
             {single ? (
               <>
-                <span className="block font-medium text-foreground truncate">{single.name}</span>
+                <span className="font-medium text-foreground line-clamp-2 break-words" title={single.name}>{single.name}</span>
                 <span className="flex gap-2 flex-wrap">
                   <Badge variant="outline" className="text-xs">{single.objective?.replace(/_/g, " ")}</Badge>
                   <Badge variant="outline" className="text-xs">{single.is_cbo ? "CBO" : "ABO"}</Badge>
@@ -158,7 +158,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
               </>
             ) : (
               <span className="block max-h-24 overflow-y-auto rounded border bg-muted/30 p-1.5">
-                {campaigns.map((c) => <span key={c.id} className="block truncate">{c.name}</span>)}
+                {campaigns.map((c) => <span key={c.id} className="block truncate" title={c.name}>{c.name}</span>)}
               </span>
             )}
           </DialogDescription>
@@ -177,7 +177,7 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
             {nameError && <p className="text-xs text-destructive">{nameError}</p>}
           </div>
 
-          <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-md border px-3 py-2">
             <label className="flex items-center gap-2 text-sm cursor-pointer whitespace-nowrap">
               <input type="checkbox" checked={numbered} onChange={(e) => toggleNumbered(e.target.checked)} className="h-3.5 w-3.5" />
               Numerar en orden ascendente
@@ -194,7 +194,8 @@ export function DuplicateCampaignModal({ campaigns, accountId, bmId, currency, o
             <p className="font-medium text-muted-foreground">Así quedarán{campaigns.length > 1 ? " (primera campaña)" : ""}:</p>
             {previewNumbers.map((n, i) => n == null
               ? <p key={i} className="text-muted-foreground">…</p>
-              : <p key={i} className="truncate font-medium" title={renderCopyName(sample, n)}>{renderCopyName(sample, n)}</p>)}
+              // Sin recortar: el número suele ir al final y es lo que distingue cada copia.
+              : <p key={i} className="break-words font-medium">{renderCopyName(sample, n)}</p>)}
             {!numbered && validCount > 1 && (
               <p className="text-warning">Todas las copias tendrán el mismo nombre.</p>
             )}
