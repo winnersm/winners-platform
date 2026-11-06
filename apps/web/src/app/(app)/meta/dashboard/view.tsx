@@ -258,7 +258,7 @@ export default function DashboardView() {
   useEffect(() => { run(); }, [run]);
 
   // Sincronización REAL contra Meta a demanda: lo mismo que hace el job de
-  // fondo (hoy cada hora, los demás filtros cada 6 h), pero sin esperarlo, y solo del
+  // fondo (hoy y este mes cada hora, los periodos cerrados cada día), pero sin esperarlo, y solo del
   // periodo en pantalla. Al terminar recarga la vista.
   const syncWithMeta = useCallback(async () => {
     setSyncing(true);

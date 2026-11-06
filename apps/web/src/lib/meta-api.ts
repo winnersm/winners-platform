@@ -4,6 +4,7 @@ import { redis } from "@/lib/redis";
 import { metaFetch } from "@/lib/meta-calls";
 import { splitExistingAds } from "@/lib/ad-dedup";
 import { MetaApiError, isRateLimitKind, serializeError, type MetaErrorDetail, type SerializedError } from "@/lib/meta-errors";
+import type { DailyInsights } from "@/lib/insight-periods";
 
 export { MetaApiError } from "@/lib/meta-errors";
 
@@ -968,6 +969,31 @@ export async function getAccountInsights(
       throw e;
     }
   });
+}
+
+// Insights a nivel cuenta, una fila por día, directo de Meta (sin caché). Con varias
+// páginas se leen todas: una lectura parcial daría totales de menos sin avisar.
+export async function getDailyAccountInsights(
+  accountId: string, since: string, until: string, bmId?: string, operationId?: string,
+): Promise<DailyInsights[]> {
+  const { token } = await getActiveToken(bmId, operationId);
+  const params = new URLSearchParams({
+    fields: "spend,impressions,clicks,ctr,cpc,cpm,actions,action_values,inline_link_clicks",
+    time_range: JSON.stringify({ since, until }),
+    time_increment: "1",
+    limit: "100",
+    access_token: token,
+  });
+  const rows: DailyInsights[] = [];
+  let next: string | null = `${META_API_BASE}/act_${accountId}/insights?${params}`;
+  while (next) {
+    const json = (await metaRequest("GET", `act_${accountId}/insights`, next, undefined, 3)) as {
+      data?: DailyInsights[]; paging?: { next?: string };
+    };
+    rows.push(...(json.data ?? []));
+    next = json.paging?.next ?? null;
+  }
+  return rows;
 }
 
 export async function updateEntityStatus(

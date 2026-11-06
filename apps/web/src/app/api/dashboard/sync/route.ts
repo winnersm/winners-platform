@@ -5,8 +5,8 @@ import { getAdAccounts } from "@/lib/meta-api";
 import { DASHBOARD_PRESETS, syncDashboardForOperation } from "@/lib/dashboard-sync";
 
 // Sincronización REAL contra Meta de la operación activa (la que dispara el
-// botón "Sincronizar con Meta"). El job de fondo hace lo mismo (hoy cada hora,
-// los demás filtros cada 6 h); esto es para no tener que esperarlo.
+// botón "Sincronizar con Meta"). El job de fondo hace lo mismo (hoy y este mes cada
+// hora, los periodos cerrados una vez al día); esto es para no tener que esperarlo.
 //
 // Es una operación lenta (una llamada por cuenta y preset, con pacing), así que
 // solo se pide el periodo que se está viendo. Las fechas personalizadas no tienen

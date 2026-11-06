@@ -6,7 +6,7 @@ import { prisma, Prisma } from "@winners/db";
 import { duplicateCampaign, duplicateAdsets, duplicateAds, getAccountCooldown, setAccountCooldown, FatalAdError } from "@/lib/meta-api";
 import { MetaApiError, isRateLimitKind, serializeError, userLine } from "@/lib/meta-errors";
 import { createPBIA, syncActiveAds, syncAllFanpages } from "@/lib/fanpages-api";
-import { DASHBOARD_HOURLY_PRESETS, DASHBOARD_SLOW_PRESETS, syncAllDashboards } from "@/lib/dashboard-sync";
+import { DASHBOARD_DAILY_PRESETS, DASHBOARD_HOURLY_PRESETS, syncAllDashboards } from "@/lib/dashboard-sync";
 import { DAILY_HISTORY_PRESETS, LISTING_PRESETS, WEEKLY_HISTORY_PRESETS, syncAllListings, syncListingsForAccount } from "@/lib/listing-sync";
 import { syncAllSpendDaily } from "@/lib/spend-history";
 import { duplicationsQueue, syncQueue, SYNC_JOB_NAMES, JOB_TYPES } from "@/lib/queue";
@@ -338,14 +338,16 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     }
     const opts = { removeOnComplete: true, removeOnFail: true };
     // Los schedulers con `every` ya lanzan una pasada inmediata al crearse/actualizarse.
-    // Rendimiento: «hoy» cada hora; los demás filtros cada 6 h. Cada pasada lee directo de Meta.
+    // Rendimiento: «hoy» y «este mes» cada hora; los periodos cerrados cada día a las 5:10
+    // (hora Colombia). A esa hora casi todas las zonas horarias están en la misma fecha,
+    // así que las cuentas de otra zona no se desfasan un día. Cada pasada lee directo de Meta.
     await syncQueue.upsertJobScheduler("sync-dashboard", { every: 60 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, data: { presets: DASHBOARD_HOURLY_PRESETS }, opts });
-    await syncQueue.upsertJobScheduler("sync-dashboard-slow", { every: 6 * 60 * 60 * 1000 }, { name: JOB_TYPES.SYNC_DASHBOARD, data: { presets: DASHBOARD_SLOW_PRESETS }, opts });
     // Listados (hora Colombia). «Sincronizar con Meta» en la UI cubre lo urgente.
     // Los ids anteriores se retiran porque upsertJobScheduler no borra programaciones:
-    // seguirían corriendo cada 30 min y cada 6 h.
+    // seguirían corriendo con su ritmo antiguo.
     const bogota = "America/Bogota";
-    for (const old of ["sync-listings", "sync-listings-deep"]) await syncQueue.removeJobScheduler(old);
+    await syncQueue.upsertJobScheduler("sync-dashboard-daily", { pattern: "10 5 * * *", tz: bogota }, { name: JOB_TYPES.SYNC_DASHBOARD, data: { presets: DASHBOARD_DAILY_PRESETS }, opts });
+    for (const old of ["sync-dashboard-slow", "sync-listings", "sync-listings-deep"]) await syncQueue.removeJobScheduler(old);
     // Estructura y «hoy»: 5:30, 12:00 y 17:30.
     const today = { name: JOB_TYPES.SYNC_LISTINGS, data: { scope: "all", presets: LISTING_PRESETS }, opts };
     await syncQueue.upsertJobScheduler("sync-listings-today-0530-1730", { pattern: "30 5,17 * * *", tz: bogota }, today);
@@ -357,7 +359,7 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     await syncQueue.upsertJobScheduler("sync-fanpages", { pattern: "0 5 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_FANPAGES, opts });
     // Gasto diario: 6:00 AM (hora Colombia). Reescribe los últimos días para captar ajustes tardíos de Meta.
     await syncQueue.upsertJobScheduler("sync-spend-daily", { pattern: "0 6 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_SPEND_DAILY, opts });
-    console.log("[worker] Sync programado: rendimiento (hoy 1 h, demás filtros 6 h) + listados y «hoy» (5:30, 12:00, 17:30) + históricos (5:00; 30 días los lunes) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
+    console.log("[worker] Sync programado: rendimiento (hoy y este mes 1 h, periodos cerrados 5:10) + listados y «hoy» (5:30, 12:00, 17:30) + históricos (5:00; 30 días los lunes) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
   } catch (e) {
     console.error("[worker] No se pudo programar los syncs:", e);
   }
