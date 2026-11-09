@@ -39,7 +39,7 @@ interface AdSet {
   id: string; name: string; status: string; campaign_id?: string;
   daily_budget?: string; lifetime_budget?: string; optimization_goal?: string;
 }
-interface Ad { id: string; name: string; status: string; creative_id?: string; }
+interface Ad { id: string; name: string; status: string; creative_id?: string; adset_id?: string; }
 
 interface Insights {
   spend: string; impressions: string; clicks: string; ctr: string; cpc: string;
@@ -675,8 +675,9 @@ function SelectionBar({
  * El latido es verde mientras la copia es reciente, ámbar al pasar de 1× el intervalo y rojo al pasar de 2×.
  * Pasados 15 min desde la última lectura, el botón salta para invitar a pedir datos frescos.
  */
-function FreshnessBar({ freshness, now, loading, onRefresh, datePreset }: {
+function FreshnessBar({ freshness, now, loading, onRefresh, datePreset, progress }: {
   freshness: Freshness; now: number; loading: boolean; onRefresh: () => void; datePreset: string;
+  progress?: { step: number; total: number; label: string } | null;
 }) {
   const { everyMin, label: plan } = syncPlan(datePreset);
   const label = freshness.source === "meta" ? "de Meta" : freshness.source === "cache" ? "en caché" : "copia guardada";
@@ -695,10 +696,10 @@ function FreshnessBar({ freshness, now, loading, onRefresh, datePreset }: {
           <span><span className="max-md:hidden">Actualizado </span>{ago(freshness.syncedAt, now)}<span className="max-md:hidden"> · {plan}</span></span>
         </span>
       )}
-      <Button variant="outline" size="sm" className={`h-7 px-2 text-xs bg-card max-md:h-10 max-md:px-3 ${ageMin > 15 && !loading ? "motion-safe:animate-bounce" : ""}`} onClick={onRefresh} disabled={loading}
-        title="Pide los datos a Meta ahora, sin usar copias guardadas.">
-        {loading ? <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5 mr-1" />}
-        Sincronizar<span className="max-md:hidden"> con Meta</span>
+      <Button variant="outline" size="sm" className={`h-7 px-2 text-xs bg-card max-md:h-10 max-md:px-3 ${ageMin > 15 && !loading ? "motion-safe:animate-bounce" : ""}`} onClick={onRefresh} disabled={loading || !!progress}
+        title="Trae de Meta las campañas, ad sets, anuncios y métricas de esta cuenta, sin usar copias guardadas.">
+        {loading || progress ? <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5 mr-1" />}
+        {progress ? <>{progress.step}/{progress.total} · {progress.label}</> : <>Sincronizar<span className="max-md:hidden"> con Meta</span></>}
       </Button>
     </div>
   );
@@ -850,6 +851,7 @@ function ManagerInner() {
   const [loadingInsights, setLoadingInsights] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<{ step: number; total: number; label: string } | null>(null);
   const [error, setError] = useState<ErrorInfo | null>(null);
   // Por nivel: cada uno sincroniza a su ritmo, y al volver a un nivel desde la caché del
   // cliente no hay petición que refresque estos datos.
@@ -1083,15 +1085,74 @@ function ManagerInner() {
     await showLevel("ad", `ads:${accountId}:${aid ?? "all"}`, () => loadAds(aid));
   }
 
-  // «Traer de Meta»: estructura y métricas en vivo, sin copias guardadas.
+  // «Sincronizar con Meta»: trae de la cuenta seleccionada, en orden y con progreso, las
+  // campañas, los ad sets y los anuncios tal cual están en Meta, y las métricas de los tres
+  // niveles para el periodo elegido. Cada paso queda guardado como copia en la DB.
+  // El general de todas las cuentas lo hace el job programado.
   async function refreshFromMeta() {
+    if (!accountId || syncProgress) return;
+    const base = new URLSearchParams({ accountId });
+    if (bmId) base.set("bmId", bmId);
+    const steps = [
+      { label: "Campañas", url: `/api/meta/sync-account?${base}&step=campaigns` },
+      { label: "Ad sets", url: `/api/meta/sync-account?${base}&step=adsets` },
+      { label: "Anuncios", url: `/api/meta/sync-account?${base}&step=ads` },
+      { label: "Métricas de campañas", url: `/api/meta/insights?${base}&level=campaign&datePreset=${datePreset}&refresh=true` },
+      { label: "Métricas de ad sets", url: `/api/meta/insights?${base}&level=adset&datePreset=${datePreset}&refresh=true` },
+      { label: "Métricas de anuncios", url: `/api/meta/insights?${base}&level=ad&datePreset=${datePreset}&refresh=true` },
+    ];
     campSnap.current.clear(); adsetSnap.current.clear(); adSnap.current.clear(); insSnap.current.clear();
-    setInsightsMap({});
-    const ins = loadInsights(level, datePreset, true);
-    if (level === "campaign") await loadCampaigns(true);
-    else if (level === "adset") await loadAdsets(selCampaign?.id, true);
-    else await loadAds(selAdset?.id, true);
-    await ins;
+    setError(null);
+    const failed: string[] = [];
+    const out: Array<Record<string, unknown> | null> = [];
+    for (let i = 0; i < steps.length; i++) {
+      setSyncProgress({ step: i + 1, total: steps.length, label: steps[i].label });
+      try {
+        const res = await fetch(steps[i].url);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { failed.push(steps[i].label); toastApiError(json, `No se pudo sincronizar: ${steps[i].label}`); out.push(null); continue; }
+        out.push(json);
+      } catch {
+        failed.push(steps[i].label);
+        toast.error(`Sin conexión al sincronizar: ${steps[i].label}`);
+        out.push(null);
+      }
+    }
+    setSyncProgress(null);
+
+    // Refleja lo traído en la vista actual y deja las copias del cliente al día.
+    const [cj, aj, dj, ic, ia, id] = out as Array<{ campaigns?: Campaign[]; adsets?: AdSet[]; ads?: Ad[]; data?: Insights[]; syncedAt?: string; source?: string } | null>;
+    const now0 = Date.now();
+    if (cj?.campaigns) {
+      campSnap.current.set(accountId, { data: { list: cj.campaigns, cur: null }, key: accountId, ts: now0 });
+      applyMeta("campaign", cj);
+      if (level === "campaign") { setCampaigns(cj.campaigns); setNextCursor(null); }
+    }
+    if (aj?.adsets) {
+      const key = `adsets:${accountId}:all`;
+      adsetSnap.current.set(key, { data: aj.adsets, key, ts: now0 });
+      applyMeta("adset", aj);
+      if (level === "adset") setAdsets(selCampaign ? aj.adsets.filter(a => a.campaign_id === selCampaign.id) : aj.adsets);
+    }
+    if (dj?.ads) {
+      const key = `ads:${accountId}:all`;
+      adSnap.current.set(key, { data: dj.ads, key, ts: now0 });
+      applyMeta("ad", dj);
+      if (level === "ad") setAds(selAdset ? dj.ads.filter(a => a.adset_id === selAdset.id) : dj.ads);
+    }
+    const insBy: Array<[Level, typeof ic]> = [["campaign", ic], ["adset", ia], ["ad", id]];
+    for (const [lvl, j] of insBy) {
+      if (!j?.data) continue;
+      const idField = lvl === "campaign" ? "campaign_id" : lvl === "adset" ? "adset_id" : "ad_id";
+      const map: Record<string, Insights> = {};
+      for (const item of j.data as Array<Insights & Record<string, string>>) if (item[idField]) map[item[idField]] = item;
+      const key = `${lvl}:${accountId}:${datePreset}`;
+      insSnap.current.set(key, { data: map, key, ts: now0 });
+      setInsFreshBy(p => ({ ...p, [lvl]: { syncedAt: j.syncedAt ?? null, source: j.source ?? null } }));
+      if (lvl === level) setInsightsMap(map);
+    }
+    if (failed.length === 0) toast.success("Campañas, ad sets, anuncios y métricas sincronizados con Meta");
+    else toast.error(`Sincronización incompleta. Falló: ${failed.join(", ")}`);
   }
 
   const tracker = useBatchTracker(() => { if (level === "campaign") void loadCampaigns(true); });
@@ -1320,7 +1381,7 @@ function ManagerInner() {
               {DATE_PRESETS.map(p => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}
             </SelectContent>
           </Select>
-          <FreshnessBar freshness={freshness} now={now} loading={loadingData || loadingInsights} onRefresh={refreshFromMeta} datePreset={datePreset} />
+          <FreshnessBar freshness={freshness} now={now} loading={loadingData || loadingInsights} onRefresh={refreshFromMeta} datePreset={datePreset} progress={syncProgress} />
         </div>
       </div>
 
