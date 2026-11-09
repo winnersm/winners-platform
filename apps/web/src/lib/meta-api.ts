@@ -253,6 +253,24 @@ async function metaGet(path: string, token: string, params: Record<string, strin
   return metaRequest("GET", path, url.toString(), undefined, retries);
 }
 
+/**
+ * Lista completa de un edge de Meta: sigue las páginas (cursor `after`) hasta agotarlas.
+ * Sin esto, un listado se corta en `limit` elementos (los ad sets y anuncios de cuentas grandes).
+ */
+async function metaGetAll(path: string, token: string, params: Record<string, string> = {}, maxPages = 200) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const all: any[] = [];
+  let after: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const json = await metaGet(path, token, after ? { ...params, after } : params);
+    all.push(...(json.data ?? []));
+    after = json.paging?.next ? json.paging?.cursors?.after : undefined;
+    if (!after) break;
+    await sleep(150); // pausa corta entre páginas para no saturar la cuota
+  }
+  return { data: all };
+}
+
 async function metaPost(path: string, token: string, body: Record<string, string | boolean | number>, retries = 3) {
   const url = new URL(`${META_API_BASE}/${path}`);
   url.searchParams.set("access_token", token);
@@ -768,7 +786,7 @@ export async function getAdSets(
   const fields = "id,name,status,effective_status,campaign_id,daily_budget,lifetime_budget,optimization_goal,start_time,end_time";
   const endpoint = campaignId ? `${campaignId}/adsets` : `act_${accountId}/adsets`;
   try {
-    const json = await metaGet(endpoint, token, { fields, limit: "200" });
+    const json = await metaGetAll(endpoint, token, { fields, limit: "200" });
     const adsets: MetaAdSet[] = json.data ?? [];
     await redis.setex(cacheKey, TTL.adsets, JSON.stringify(adsets));
     await redis.setex(staleKey, STALE_TTL, JSON.stringify(adsets));
@@ -810,7 +828,7 @@ export async function getAds(
   const endpoint = adsetId ? `${adsetId}/ads` : campaignId ? `${campaignId}/ads` : `act_${accountId}/ads`;
   const fields = "id,name,status,adset_id,campaign_id,creative{id}";
   try {
-    const json = await metaGet(endpoint, token, { fields, limit: "200" });
+    const json = await metaGetAll(endpoint, token, { fields, limit: "200" });
     const ads: MetaAd[] = (json.data ?? []).map((a: Record<string, unknown> & { creative?: { id: string } }) => ({
       id: a.id as string,
       name: a.name as string,
