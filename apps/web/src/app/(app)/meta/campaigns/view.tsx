@@ -872,10 +872,12 @@ function ManagerInner() {
   const [showDuplicateAdsModal, setShowDuplicateAdsModal] = useState(false);
 
   // Snapshots para caché client-side (sobreviven re-renders, no recargas de página)
-  const campSnap = useRef<Snap<{ list: Campaign[]; cur: string | null }> | null>(null);
-  const adsetSnap = useRef<Snap<AdSet[]> | null>(null);
-  const adSnap = useRef<Snap<Ad[]> | null>(null);
-  const insSnap = useRef<Snap<Record<string, Insights>> | null>(null);
+  // Un Map por nivel, con una entrada por clave (campaña, ad set, periodo): volver a una
+  // vista ya visitada la recupera al instante en vez de pedirla otra vez a Meta.
+  const campSnap = useRef(new Map<string, Snap<{ list: Campaign[]; cur: string | null }>>());
+  const adsetSnap = useRef(new Map<string, Snap<AdSet[]>>());
+  const adSnap = useRef(new Map<string, Snap<Ad[]>>());
+  const insSnap = useRef(new Map<string, Snap<Record<string, Insights>>>());
 
   // "hace X min" se actualiza solo.
   useEffect(() => {
@@ -913,7 +915,7 @@ function ManagerInner() {
       applyMeta("campaign", json);
       setCampaigns(prev => cursor ? [...prev, ...json.campaigns] : json.campaigns);
       setNextCursor(json.nextCursor);
-      if (!cursor) campSnap.current = { data: { list: json.campaigns, cur: json.nextCursor }, key: accountId, ts: Date.now() };
+      if (!cursor) campSnap.current.set(accountId, { data: { list: json.campaigns, cur: json.nextCursor }, key: accountId, ts: Date.now() });
     } catch {
       setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión y pulsa «Traer de Meta»." });
     } finally {
@@ -934,7 +936,7 @@ function ManagerInner() {
       if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar ad sets" }); return; }
       applyMeta("adset", json);
       setAdsets(json.adsets);
-      adsetSnap.current = { data: json.adsets, key: `adsets:${accountId}:${campaignId || "all"}`, ts: Date.now() };
+      { const key = `adsets:${accountId}:${campaignId || "all"}`; adsetSnap.current.set(key, { data: json.adsets, key, ts: Date.now() }); }
     } catch {
       setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión y pulsa «Traer de Meta»." });
     } finally {
@@ -955,7 +957,7 @@ function ManagerInner() {
       if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar anuncios" }); return; }
       applyMeta("ad", json);
       setAds(json.ads);
-      adSnap.current = { data: json.ads, key: `ads:${accountId}:${adsetId || "all"}`, ts: Date.now() };
+      { const key = `ads:${accountId}:${adsetId || "all"}`; adSnap.current.set(key, { data: json.ads, key, ts: Date.now() }); }
     } catch {
       setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión y pulsa «Traer de Meta»." });
     } finally {
@@ -984,7 +986,7 @@ function ManagerInner() {
         if (item[idField]) map[item[idField]] = item;
       }
       setInsightsMap(map);
-      insSnap.current = { data: map, key: `${lvl}:${accountId}:${date}`, ts: Date.now() };
+      { const key = `${lvl}:${accountId}:${date}`; insSnap.current.set(key, { data: map, key, ts: Date.now() }); }
     } catch (e) {
       console.error(`[insights] fetch error:`, e);
       toast.error("No se pudo conectar con el servidor para cargar las métricas");
@@ -1017,86 +1019,73 @@ function ManagerInner() {
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
-  function clearSelections() {
-    setSelectedCampaignIds(new Set()); setSelectedAdsetIds(new Set()); setSelectedAdIds(new Set());
+  // Las selecciones se conservan al cambiar de nivel o de campaña: solo se vacían tras
+  // duplicar, o al «Traer de Meta» (ahí se descartan los ids que ya no existen).
+
+  /** Muestra de inmediato lo que haya en caché y pide solo lo que falte o esté vencido. */
+  async function showLevel(
+    lvl: Level, dKey: string, load: () => Promise<void>,
+  ) {
+    const iKey = `${lvl}:${accountId}:${datePreset}`;
+    const insSnapHit = insSnap.current.get(iKey);
+    const insOk = fresh(insSnapHit ?? null, iKey);
+    if (insOk) setInsightsMap(insSnapHit!.data); else setInsightsMap({});
+    let dataOk = false;
+    if (lvl === "campaign") {
+      const h = campSnap.current.get(dKey);
+      if (fresh(h ?? null, dKey)) { dataOk = true; setCampaigns(h!.data.list); setNextCursor(h!.data.cur); }
+    } else if (lvl === "adset") {
+      const h = adsetSnap.current.get(dKey);
+      if (fresh(h ?? null, dKey)) { dataOk = true; setAdsets(h!.data); }
+    } else {
+      const h = adSnap.current.get(dKey);
+      if (fresh(h ?? null, dKey)) { dataOk = true; setAds(h!.data); }
+    }
+    if (!dataOk) {
+      // Caducada o ausente: se deja ver lo último que había mientras llega lo nuevo.
+      if (lvl === "campaign") { const h = campSnap.current.get(dKey); if (h) { setCampaigns(h.data.list); setNextCursor(h.data.cur); } else { setCampaigns([]); setNextCursor(null); } }
+      else if (lvl === "adset") setAdsets(adsetSnap.current.get(dKey)?.data ?? []);
+      else setAds(adSnap.current.get(dKey)?.data ?? []);
+      await load();
+    }
+    if (!insOk) loadInsights(lvl, datePreset);
   }
 
   async function drillAdsets(campaign: Selection) {
     setSelCampaign({ id: campaign.id, name: campaign.name });
     setSelAdset(null);
     setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
-    clearSelections();
-    const dKey = `adsets:${accountId}:${campaign.id}`;
-    const iKey = `adset:${accountId}:${datePreset}`;
-    const dataOk = fresh(adsetSnap.current, dKey);
-    const insOk = fresh(insSnap.current, iKey);
-    if (dataOk) setAdsets(adsetSnap.current!.data); else setAdsets([]);
-    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataOk) await loadAdsets(campaign.id);
-    if (!insOk) loadInsights("adset", datePreset);
+    await showLevel("adset", `adsets:${accountId}:${campaign.id}`, () => loadAdsets(campaign.id));
   }
 
   async function drillAds(adset: AdSet) {
     setSelAdset({ id: adset.id, name: adset.name });
     setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
-    clearSelections();
-    const dKey = `ads:${accountId}:${adset.id}`;
-    const iKey = `ad:${accountId}:${datePreset}`;
-    const dataOk = fresh(adSnap.current, dKey);
-    const insOk = fresh(insSnap.current, iKey);
-    if (dataOk) setAds(adSnap.current!.data); else setAds([]);
-    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataOk) await loadAds(adset.id);
-    if (!insOk) loadInsights("ad", datePreset);
+    await showLevel("ad", `ads:${accountId}:${adset.id}`, () => loadAds(adset.id));
   }
 
-  // Tabs siempre clickeables → nivel cuenta
+  // Tabs siempre clickeables. Conservan la campaña / ad set elegidos para no perder el contexto.
   async function goToCampaigns() {
     setSelCampaign(null); setSelAdset(null);
     setLevel("campaign"); setNameFilter(""); setStatusFilter("ACTIVE");
-    clearSelections();
-    const dKey = accountId!;
-    const iKey = `campaign:${accountId}:${datePreset}`;
-    const dataOk = fresh(campSnap.current, dKey);
-    const insOk = fresh(insSnap.current, iKey);
-    if (dataOk) { setCampaigns(campSnap.current!.data.list); setNextCursor(campSnap.current!.data.cur); }
-    else { setCampaigns([]); setNextCursor(null); }
-    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataOk) await loadCampaigns();
-    if (!insOk) loadInsights("campaign", datePreset);
+    await showLevel("campaign", accountId!, () => loadCampaigns());
   }
 
   async function goToAdsets() {
-    setSelCampaign(null); setSelAdset(null);
     setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
-    clearSelections();
-    const dKey = `adsets:${accountId}:all`;
-    const iKey = `adset:${accountId}:${datePreset}`;
-    const dataOk = fresh(adsetSnap.current, dKey);
-    const insOk = fresh(insSnap.current, iKey);
-    if (dataOk) setAdsets(adsetSnap.current!.data); else setAdsets([]);
-    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataOk) await loadAdsets();
-    if (!insOk) loadInsights("adset", datePreset);
+    const cid = selCampaign?.id;
+    await showLevel("adset", `adsets:${accountId}:${cid ?? "all"}`, () => loadAdsets(cid));
   }
 
   async function goToAds() {
-    setSelAdset(null);
     setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
-    clearSelections();
-    const dKey = `ads:${accountId}:all`;
-    const iKey = `ad:${accountId}:${datePreset}`;
-    const dataOk = fresh(adSnap.current, dKey);
-    const insOk = fresh(insSnap.current, iKey);
-    if (dataOk) setAds(adSnap.current!.data); else setAds([]);
-    if (insOk) setInsightsMap(insSnap.current!.data); else setInsightsMap({});
-    if (!dataOk) await loadAds();
-    if (!insOk) loadInsights("ad", datePreset);
+    const aid = selAdset?.id;
+    await showLevel("ad", `ads:${accountId}:${aid ?? "all"}`, () => loadAds(aid));
   }
 
   // «Traer de Meta»: estructura y métricas en vivo, sin copias guardadas.
   async function refreshFromMeta() {
-    campSnap.current = null; adsetSnap.current = null; adSnap.current = null; insSnap.current = null;
+    campSnap.current.clear(); adsetSnap.current.clear(); adSnap.current.clear(); insSnap.current.clear();
     setInsightsMap({});
     const ins = loadInsights(level, datePreset, true);
     if (level === "campaign") await loadCampaigns(true);
