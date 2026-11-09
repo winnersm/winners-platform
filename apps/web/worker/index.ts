@@ -3,7 +3,8 @@ if (process.env.NODE_ENV !== "production") {
 }
 import { Worker, DelayedError, type Job as BullJob } from "bullmq";
 import { prisma, Prisma } from "@winners/db";
-import { duplicateCampaign, duplicateAdsets, duplicateAds, getAccountCooldown, setAccountCooldown, FatalAdError } from "@/lib/meta-api";
+import { duplicateCampaign, duplicateAdsets, duplicateAds, getAccountCooldown, setAccountCooldown, FatalAdError, listActiveDescendants, getPauser, invalidateAccountCaches } from "@/lib/meta-api";
+import { patchListingSnapshotStatus } from "@/lib/listing-sync";
 import { MetaApiError, isRateLimitKind, serializeError, userLine } from "@/lib/meta-errors";
 import { createPBIA, syncActiveAds, syncAllFanpages } from "@/lib/fanpages-api";
 import { DASHBOARD_DAILY_PRESETS, DASHBOARD_HOURLY_PRESETS, syncAllDashboards } from "@/lib/dashboard-sync";
@@ -44,7 +45,8 @@ function releaseAccount(accountId?: string): void {
 }
 
 /** Tipos que se pueden reanudar sin duplicar nada (tienen punto de control). */
-const RESUMABLE = new Set<string>([JOB_TYPES.DUPLICATE_CAMPAIGN]);
+// PAUSE_CASCADE reanuda sin repetir: al volver a listar solo quedan los hijos aún activos.
+const RESUMABLE = new Set<string>([JOB_TYPES.DUPLICATE_CAMPAIGN, JOB_TYPES.PAUSE_CASCADE]);
 
 // Pausas ante un límite de Meta: cada vez más largas, porque el medidor de cuota
 // no siempre avisa cuándo se libera. En total, ~2 h 20 min antes de rendirse.
@@ -213,6 +215,50 @@ async function runJob(bullJob: BullJob, jobId: string, logs: LogEntry[], token?:
           where: { id: jobId },
           data: { status: "completed", progress: 100, output: JSON.parse(JSON.stringify(result)), logs },
         });
+        break;
+      }
+
+      case "PAUSE_CASCADE": {
+        const { entityId, entityType, accountId, bmId, operationId } = bullJob.data as {
+          entityId: string; entityType: "campaign" | "adset"; accountId: string; bmId?: string; operationId?: string;
+        };
+        const doneAdsets = Number(prevOutput.pausedAdsets ?? 0);
+        const doneAds = Number(prevOutput.pausedAds ?? 0);
+        const failedBefore = Number(prevOutput.failed ?? 0);
+        await cb(2, "Buscando ad sets y anuncios activos…");
+        const list = await listActiveDescendants(entityId, entityType, accountId, bmId);
+        const todo: Array<{ id: string; level: "adset" | "ad" }> = [
+          ...list.adsets.map(x => ({ id: x.id, level: "adset" as const })),
+          ...list.ads.map(x => ({ id: x.id, level: "ad" as const })),
+        ];
+        const total = doneAdsets + doneAds + todo.length;
+        let pausedAdsets = doneAdsets, pausedAds = doneAds, failed = failedBefore;
+        const save = (data: Prisma.MetaJobUpdateInput = {}) => prisma.metaJob.update({
+          where: { id: jobId },
+          data: { output: { ...outputWithoutWaiting, pausedAdsets, pausedAds, failed, total } as Prisma.InputJsonValue, ...data },
+        });
+        const pause = await getPauser(bmId);
+        for (let i = 0; i < todo.length; i++) {
+          await checkCancelled();
+          const t = todo[i];
+          try {
+            await pause(t.id);
+            if (t.level === "adset") pausedAdsets++; else pausedAds++;
+            if (operationId) await patchListingSnapshotStatus(operationId, accountId, t.level, t.id, "PAUSED").catch(() => {});
+          } catch (e) {
+            // El límite de Meta no es un fallo del hijo: sube para que el trabajo espere y reanude.
+            if (e instanceof MetaApiError && isRateLimitKind(e.kind)) { await save(); throw e; }
+            failed++;
+            logs.push({ ts: new Date().toISOString(), msg: `No se pudo pausar ${t.level === "adset" ? "el ad set" : "el anuncio"} ${t.id}` });
+          }
+          const doneNow = pausedAdsets + pausedAds + failed;
+          await cb(Math.min(99, Math.round((doneNow / Math.max(1, total)) * 100)),
+            `Pausando ${t.level === "adset" ? "ad sets" : "anuncios"} · ${doneNow}/${total}`);
+          if (i % 10 === 9) await save();
+          await new Promise(r => setTimeout(r, 150));
+        }
+        await invalidateAccountCaches(accountId);
+        await save({ status: "completed", progress: 100, logs });
         break;
       }
 

@@ -779,11 +779,13 @@ function BatchBanner({ batch, onDismiss, onOpenJobs }: { batch: BatchState | nul
 
 /** Cambia el estado de varias entidades de una en una (sin ráfagas a Meta). */
 async function bulkStatus(
-  items: Array<{ id: string; accountId: string; bmId?: string }>, entityType: Level, status: EntityStatus,
-): Promise<{ ok: string[]; failed: number; firstError: unknown }> {
+  items: Array<{ id: string; accountId: string; bmId?: string; name?: string }>, entityType: Level, status: EntityStatus,
+): Promise<{ ok: string[]; failed: number; firstError: unknown; cascadeJobs: string[] }> {
   const ok: string[] = [];
+  const cascadeJobs: string[] = [];
   let failed = 0;
   let firstError: unknown = null;
+  const batchId = items.length > 1 ? `pausa-${Date.now()}` : undefined;
   for (const it of items) {
     try {
       const res = await fetch("/api/meta/status", {
@@ -791,14 +793,79 @@ async function bulkStatus(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ entityId: it.id, status, accountId: it.accountId, entityType, bmId: it.bmId }),
       });
-      if (res.ok) ok.push(it.id);
-      else { failed++; firstError ??= await res.json().catch(() => null); }
+      if (res.ok) {
+        ok.push(it.id);
+        if (status === "PAUSED" && entityType !== "ad") {
+          const jobId = await queueCascade(it, entityType, batchId, items.length);
+          if (jobId) cascadeJobs.push(jobId);
+        }
+      } else { failed++; firstError ??= await res.json().catch(() => null); }
     } catch {
       failed++;
     }
     await new Promise(r => setTimeout(r, 250));
   }
-  return { ok, failed, firstError };
+  return { ok, failed, firstError, cascadeJobs };
+}
+
+/**
+ * Pide al servidor pausar, en segundo plano, los ad sets y anuncios que siguen activos debajo
+ * de una campaña (o ad set). Lo hace el worker: sigue aunque se cierre el navegador, y su
+ * avance también se ve en Trabajos. Devuelve el id del trabajo, o null si no se pudo crear.
+ */
+async function queueCascade(
+  parent: { id: string; accountId: string; bmId?: string; name?: string }, entityType: Level,
+  batchId?: string, total?: number,
+): Promise<string | null> {
+  try {
+    const res = await fetch("/api/meta/status-cascade", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entityId: parent.id, entityType, accountId: parent.accountId, name: parent.name, bmId: parent.bmId, batchId, total }),
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.jobId) { toastApiError(json, "No se pudo pausar lo que tiene debajo"); return null; }
+    return json.jobId as string;
+  } catch {
+    toast.error("No se pudo pausar lo que tiene debajo: sin conexión con el servidor");
+    return null;
+  }
+}
+
+/**
+ * Muestra en un aviso cómo va la pausa en cascada (consultando los trabajos). Solo es la vista:
+ * el trabajo corre en el servidor y continúa aunque esta página se cierre.
+ */
+async function trackCascade(jobIds: string[], onDone: () => void) {
+  if (jobIds.length === 0) return;
+  const toastId = `cascada-${jobIds[0]}`;
+  type J = { status: string; progress: number; output?: { pausedAdsets?: number; pausedAds?: number; failed?: number; total?: number } | null; error?: string | null };
+  toast.loading("Pausando ad sets y anuncios · en segundo plano…", { id: toastId, description: "Puedes cerrar la página: sigue en el servidor." });
+  for (let tick = 0; tick < 2400; tick++) { // ~2 h como máximo; el trabajo no depende de esto
+    await new Promise(r => setTimeout(r, 3000));
+    let jobs: J[];
+    try {
+      jobs = await Promise.all(jobIds.map(id => fetch(`/api/jobs/${id}`).then(r => r.json()).then(j => j.job as J)));
+    } catch { continue; }
+    const finished = jobs.filter(j => ["completed", "failed", "cancelled"].includes(j.status));
+    const done = jobs.reduce((n, j) => n + (j.output?.pausedAdsets ?? 0) + (j.output?.pausedAds ?? 0) + (j.output?.failed ?? 0), 0);
+    const total = jobs.reduce((n, j) => n + (j.output?.total ?? 0), 0);
+    if (finished.length < jobs.length) {
+      const where = jobIds.length > 1 ? ` · campaña ${finished.length + 1}/${jobIds.length}` : "";
+      toast.loading(`Pausando ad sets y anuncios · ${done}${total ? `/${total}` : ""}${where}`, {
+        id: toastId, description: "Puedes cerrar la página: sigue en el servidor.",
+      });
+      continue;
+    }
+    const failed = jobs.reduce((n, j) => n + (j.output?.failed ?? 0), 0) + jobs.filter(j => j.status !== "completed").length;
+    const sets = jobs.reduce((n, j) => n + (j.output?.pausedAdsets ?? 0), 0);
+    const ads = jobs.reduce((n, j) => n + (j.output?.pausedAds ?? 0), 0);
+    toast.dismiss(toastId);
+    if (failed > 0) toast.warning(`Pausa terminada con errores: ${sets} ad sets y ${ads} anuncios pausados, ${failed} fallaron`, { description: "Revisa el detalle en Trabajos.", duration: 12_000 });
+    else toast.success(`También se pausaron ${sets} ad sets y ${ads} anuncios`);
+    onDone();
+    return;
+  }
+  toast.dismiss(toastId);
 }
 
 function reportBulk(r: { ok: string[]; failed: number; firstError: unknown }, status: EntityStatus) {
@@ -1172,6 +1239,13 @@ function ManagerInner() {
     else setAds(p => p.map(a => ids.has(a.id) ? { ...a, status } : a));
   }
 
+  /** Terminada la pausa en cascada: vuelve a leer ad sets y anuncios (la DB ya está corregida). */
+  function reloadChildren() {
+    adsetSnap.current.clear(); adSnap.current.clear();
+    if (level === "adset") void loadAdsets(selCampaign?.id);
+    else if (level === "ad") void loadAds(selAdset?.id, false, selCampaign?.id);
+  }
+
   async function toggleStatus(entityId: string, currentStatus: string, entityType: Level) {
     if (loadingStatus.has(entityId) || !accountId) return;
     const newStatus = currentStatus === "ACTIVE" ? "PAUSED" : "ACTIVE";
@@ -1203,6 +1277,11 @@ function ManagerInner() {
         return;
       }
       toast.success(newStatus === "ACTIVE" ? "Activado" : "Pausado");
+      if (newStatus === "PAUSED" && entityType !== "ad") {
+        const name = (entityType === "campaign" ? campaigns : adsets).find(e => e.id === entityId)?.name;
+        const jobId = await queueCascade({ id: entityId, accountId, bmId, name }, entityType);
+        if (jobId) void trackCascade([jobId], reloadChildren);
+      }
     } catch {
       patchStatus(entityType, new Set([entityId]), currentStatus);
       toast.error("No se pudo conectar con el servidor; el estado no cambió");
@@ -1215,9 +1294,11 @@ function ManagerInner() {
     if (!accountId || ids.size === 0) return;
     setBulkBusy(true);
     try {
-      const r = await bulkStatus([...ids].map(id => ({ id, accountId, bmId })), entityType, status);
+      const nameOf = (id: string) => (entityType === "campaign" ? campaigns : entityType === "adset" ? adsets : ads).find(e => e.id === id)?.name;
+      const r = await bulkStatus([...ids].map(id => ({ id, accountId, bmId, name: nameOf(id) })), entityType, status);
       patchStatus(entityType, new Set(r.ok), status);
       reportBulk(r, status);
+      if (r.cascadeJobs.length) void trackCascade(r.cascadeJobs, reloadChildren);
     } finally {
       setBulkBusy(false);
     }
@@ -1866,10 +1947,11 @@ function GlobalCampaignsView() {
   async function bulk(status: EntityStatus) {
     setBulkBusy(true);
     try {
-      const res = await bulkStatus(selRows.filter(r => r.camp.status === fromStatus(status)).map(r => ({ id: r.camp.id, accountId: r.accId, bmId: r.bmId })), "campaign", status);
+      const res = await bulkStatus(selRows.filter(r => r.camp.status === fromStatus(status)).map(r => ({ id: r.camp.id, accountId: r.accId, bmId: r.bmId, name: r.camp.name })), "campaign", status);
       const ok = new Set(res.ok);
       setRows(prev => prev.map(r => ok.has(r.camp.id) ? { ...r, camp: { ...r.camp, status } } : r));
       reportBulk(res, status);
+      if (res.cascadeJobs.length) void trackCascade(res.cascadeJobs, () => {});
     } finally {
       setBulkBusy(false);
     }

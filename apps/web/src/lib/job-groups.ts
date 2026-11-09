@@ -17,7 +17,7 @@ export interface JobLike {
   userName?: string | null;
 }
 
-export type JobKind = "campaign" | "adset" | "ad" | "sync" | "pbia" | "other";
+export type JobKind = "campaign" | "adset" | "ad" | "sync" | "pbia" | "pause" | "other";
 
 const KIND_BY_TYPE: Record<string, JobKind> = {
   DUPLICATE_CAMPAIGN: "campaign",
@@ -25,6 +25,7 @@ const KIND_BY_TYPE: Record<string, JobKind> = {
   DUPLICATE_AD: "ad",
   SYNC_ACTIVE_ADS: "sync",
   CREATE_PBIA_BULK: "pbia",
+  PAUSE_CASCADE: "pause",
 };
 export const kindOf = (type: string): JobKind => KIND_BY_TYPE[type] ?? "other";
 
@@ -116,6 +117,10 @@ function subjectOf(kind: JobKind, jobs: JobLike[]): string {
     if (names.length <= 1) return names[0] ?? (kind === "adset" ? "Ad sets" : "Anuncios");
     return commonTags(names) ?? `${names[0]} y ${names.length - 1} más`;
   }
+  if (kind === "pause") {
+    const names = unique(jobs.map(j => String(input(j).name ?? input(j).entityId ?? "")));
+    return `Pausar ${names.length <= 1 ? names[0] || "campaña" : plural(names.length, "campaña", "campañas")} y lo que tiene debajo`;
+  }
   if (kind === "sync") return "Conteo de ads activos";
   if (kind === "pbia") return "Crear cuentas de Instagram (PBIA)";
   return "Trabajo";
@@ -138,6 +143,12 @@ function resultOf(kind: JobKind, jobs: JobLike[]): string {
     const expected = jobs.reduce((n, j) => n + listOf(j.input?.ads).length, 0);
     const created = jobs.reduce((n, j) => n + numberOf(j.output?.adsCount), 0);
     return created === expected ? plural(created, "anuncio", "anuncios") : `${created} de ${plural(expected, "anuncio", "anuncios")}`;
+  }
+  if (kind === "pause") {
+    const sets = jobs.reduce((n, j) => n + numberOf(j.output?.pausedAdsets), 0);
+    const ads = jobs.reduce((n, j) => n + numberOf(j.output?.pausedAds), 0);
+    const failed = jobs.reduce((n, j) => n + numberOf(j.output?.failed), 0);
+    return `${plural(sets, "ad set", "ad sets")} y ${plural(ads, "anuncio", "anuncios")} pausados${failed ? ` · ${failed} con error` : ""}`;
   }
   if (kind === "sync") {
     const o = jobs[0]?.output;

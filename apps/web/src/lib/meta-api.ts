@@ -1034,6 +1034,30 @@ export async function updateEntityStatus(
   await invalidateAccountCaches(accountId);
 }
 
+/** Devuelve una función que pausa una entidad por id con un solo token (sin invalidar cachés cada vez). */
+export async function getPauser(bmId?: string): Promise<(entityId: string) => Promise<void>> {
+  const { token } = await getActiveToken(bmId);
+  return (entityId) => setEntityStatus(entityId, token, "PAUSED");
+}
+
+/**
+ * Ad sets y anuncios que siguen ACTIVE debajo de una campaña (o de un ad set), pedidos a Meta
+ * en vivo. La UI los pausa uno a uno mostrando el avance: Meta ya deja de entregar al pausar
+ * el padre, pero cada hijo conservaría su estado «activo».
+ */
+export async function listActiveDescendants(
+  entityId: string, entityType: "campaign" | "adset", accountId: string, bmId?: string,
+): Promise<{ adsets: Array<{ id: string; name: string }>; ads: Array<{ id: string; name: string }> }> {
+  const adsetRows = entityType === "campaign"
+    ? await getAdSets(accountId, entityId, bmId, undefined, { force: true }) : [];
+  const adRows = entityType === "campaign"
+    ? await getAds(accountId, undefined, bmId, undefined, { force: true, campaignId: entityId })
+    : await getAds(accountId, entityId, bmId, undefined, { force: true });
+  const act = <T extends { id: string; name: string; status: string }>(r: T[]) =>
+    r.filter((x) => x.status === "ACTIVE").map((x) => ({ id: x.id, name: x.name }));
+  return { adsets: act(adsetRows), ads: act(adRows) };
+}
+
 export async function verifyToken(token: string, bmMetaId: string): Promise<{ valid: boolean; name?: string }> {
   try {
     const json = await metaGet(`${bmMetaId}`, token, { fields: "id,name" });

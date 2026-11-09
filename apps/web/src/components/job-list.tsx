@@ -57,6 +57,7 @@ const KIND: Record<JobKind, { label: string; icon: typeof Layers }> = {
   ad: { label: "Anuncios", icon: ImageIcon },
   sync: { label: "Sincronización", icon: RefreshCw },
   pbia: { label: "PBIA", icon: Camera },
+  pause: { label: "Pausas", icon: RefreshCw },
   other: { label: "Trabajo", icon: Briefcase },
 };
 
