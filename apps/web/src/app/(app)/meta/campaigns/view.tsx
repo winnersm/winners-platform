@@ -1405,10 +1405,10 @@ function ManagerInner() {
 
       {/* Campaña (y ad set) en la que estoy navegando */}
       {selCampaign && level !== "campaign" && (
-        <div className="flex items-center gap-2 pt-2 text-xs text-muted-foreground max-md:hidden">
+        <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 pt-2 text-xs text-muted-foreground ${level === "adset" ? "max-md:hidden" : ""}`}>
           <span>Navegando en la campaña</span>
-          <span className="rounded-md border bg-card px-2 py-0.5 font-medium text-foreground max-w-[32rem] truncate" title={selCampaign.name}>{selCampaign.name}</span>
-          {level === "ad" && selAdset && (<><ChevronRight className="h-3 w-3" /><span className="rounded-md border bg-card px-2 py-0.5 font-medium text-foreground max-w-[24rem] truncate" title={selAdset.name}>{selAdset.name}</span></>)}
+          <span className="rounded-md border bg-card px-2 py-0.5 font-medium text-foreground max-w-full md:max-w-[32rem] truncate" title={selCampaign.name}>{selCampaign.name}</span>
+          {level === "ad" && selAdset && (<><ChevronRight className="h-3 w-3" /><span className="rounded-md border bg-card px-2 py-0.5 font-medium text-foreground max-w-full md:max-w-[24rem] truncate" title={selAdset.name}>{selAdset.name}</span></>)}
           <button className="text-primary hover:underline" onClick={goToCampaigns}>Cambiar</button>
         </div>
       )}
