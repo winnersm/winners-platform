@@ -39,7 +39,7 @@ interface AdSet {
   id: string; name: string; status: string; campaign_id?: string;
   daily_budget?: string; lifetime_budget?: string; optimization_goal?: string;
 }
-interface Ad { id: string; name: string; status: string; creative_id?: string; adset_id?: string; }
+interface Ad { id: string; name: string; status: string; creative_id?: string; adset_id?: string; campaign_id?: string; }
 
 interface Insights {
   spend: string; impressions: string; clicks: string; ctr: string; cpc: string;
@@ -946,11 +946,12 @@ function ManagerInner() {
     }
   }, [accountId, bmId, applyMeta]);
 
-  const loadAds = useCallback(async (adsetId?: string, refresh = false) => {
+  const loadAds = useCallback(async (adsetId?: string, refresh = false, campaignId?: string) => {
     if (!accountId) return;
     setLoadingData(true); setError(null);
     const p = new URLSearchParams({ accountId });
     if (adsetId) p.set("adsetId", adsetId);
+    else if (campaignId) p.set("campaignId", campaignId);
     if (bmId) p.set("bmId", bmId);
     if (refresh) p.set("refresh", "true");
     try {
@@ -959,7 +960,7 @@ function ManagerInner() {
       if (!res.ok) { setError(errorInfoOf(json) ?? { title: json.error ?? "Error al cargar anuncios" }); return; }
       applyMeta("ad", json);
       setAds(json.ads);
-      { const key = `ads:${accountId}:${adsetId || "all"}`; adSnap.current.set(key, { data: json.ads, key, ts: Date.now() }); }
+      { const key = `ads:${accountId}:${adsetId || (campaignId ? `c:${campaignId}` : "all")}`; adSnap.current.set(key, { data: json.ads, key, ts: Date.now() }); }
     } catch {
       setError({ kind: "network", title: "No se pudo conectar con el servidor", action: "Revisa tu conexión y pulsa «Traer de Meta»." });
     } finally {
@@ -1081,8 +1082,9 @@ function ManagerInner() {
 
   async function goToAds() {
     setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
-    const aid = selAdset?.id;
-    await showLevel("ad", `ads:${accountId}:${aid ?? "all"}`, () => loadAds(aid));
+    // Con un ad set elegido, sus anuncios; si no, los de la campaña; sin campaña, toda la cuenta.
+    const aid = selAdset?.id, cid = selCampaign?.id;
+    await showLevel("ad", `ads:${accountId}:${aid ?? (cid ? `c:${cid}` : "all")}`, () => loadAds(aid, false, cid));
   }
 
   // «Sincronizar con Meta»: trae de la cuenta seleccionada, en orden y con progreso, las
@@ -1138,7 +1140,12 @@ function ManagerInner() {
       const key = `ads:${accountId}:all`;
       adSnap.current.set(key, { data: dj.ads, key, ts: now0 });
       applyMeta("ad", dj);
-      if (level === "ad") setAds(selAdset ? dj.ads.filter(a => a.adset_id === selAdset.id) : dj.ads);
+      if (level === "ad") {
+        const campAdsets = new Set((aj?.adsets ?? adsets).filter(a => a.campaign_id === selCampaign?.id).map(a => a.id));
+        setAds(selAdset ? dj.ads.filter(a => a.adset_id === selAdset.id)
+          : selCampaign ? dj.ads.filter(a => a.campaign_id === selCampaign.id || (!!a.adset_id && campAdsets.has(a.adset_id)))
+          : dj.ads);
+      }
     }
     const insBy: Array<[Level, typeof ic]> = [["campaign", ic], ["adset", ia], ["ad", id]];
     for (const [lvl, j] of insBy) {
@@ -1394,6 +1401,16 @@ function ManagerInner() {
           <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">{parentName}</span>
         </button>
+      )}
+
+      {/* Campaña (y ad set) en la que estoy navegando */}
+      {selCampaign && level !== "campaign" && (
+        <div className="flex items-center gap-2 pt-2 text-xs text-muted-foreground max-md:hidden">
+          <span>Navegando en la campaña</span>
+          <span className="rounded-md border bg-card px-2 py-0.5 font-medium text-foreground max-w-[32rem] truncate" title={selCampaign.name}>{selCampaign.name}</span>
+          {level === "ad" && selAdset && (<><ChevronRight className="h-3 w-3" /><span className="rounded-md border bg-card px-2 py-0.5 font-medium text-foreground max-w-[24rem] truncate" title={selAdset.name}>{selAdset.name}</span></>)}
+          <button className="text-primary hover:underline" onClick={goToCampaigns}>Cambiar</button>
+        </div>
       )}
 
       {/* Toolbar */}

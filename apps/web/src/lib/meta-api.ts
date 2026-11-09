@@ -788,6 +788,7 @@ export interface MetaAd {
   status: string;
   creative_id?: string;
   adset_id?: string;
+  campaign_id?: string;
 }
 
 export async function getAds(
@@ -795,16 +796,19 @@ export async function getAds(
   adsetId?: string,
   bmId?: string,
   operationId?: string,
-  opts: FetchOpts = {}
+  opts: FetchOpts & { campaignId?: string } = {}
 ): Promise<MetaAd[]> {
-  const cacheKey = adsetId ? `meta:ads:${operationId ?? "all"}:${adsetId}` : `meta:ads:${operationId ?? "all"}:account:${accountId}`;
+  const campaignId = adsetId ? undefined : opts.campaignId;
+  const cacheKey = adsetId ? `meta:ads:${operationId ?? "all"}:${adsetId}`
+    : campaignId ? `meta:ads:${operationId ?? "all"}:campaign:${campaignId}`
+    : `meta:ads:${operationId ?? "all"}:account:${accountId}`;
   const staleKey = `${cacheKey}:stale`;
   const cached = opts.force ? null : await redis.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
   const { token } = await getActiveToken(bmId, operationId);
-  const endpoint = adsetId ? `${adsetId}/ads` : `act_${accountId}/ads`;
-  const fields = "id,name,status,adset_id,creative{id}";
+  const endpoint = adsetId ? `${adsetId}/ads` : campaignId ? `${campaignId}/ads` : `act_${accountId}/ads`;
+  const fields = "id,name,status,adset_id,campaign_id,creative{id}";
   try {
     const json = await metaGet(endpoint, token, { fields, limit: "200" });
     const ads: MetaAd[] = (json.data ?? []).map((a: Record<string, unknown> & { creative?: { id: string } }) => ({
@@ -813,6 +817,7 @@ export async function getAds(
       status: a.status as string,
       creative_id: a.creative?.id,
       adset_id: a.adset_id as string | undefined,
+      campaign_id: a.campaign_id as string | undefined,
     }));
     await redis.setex(cacheKey, TTL.ads, JSON.stringify(ads));
     await redis.setex(staleKey, STALE_TTL, JSON.stringify(ads));
