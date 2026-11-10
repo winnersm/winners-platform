@@ -1019,6 +1019,48 @@ export async function getDailyAccountInsights(
   return rows;
 }
 
+// Insights de UNA campaña, ad set o anuncio, una fila por día (para sus gráficas).
+// Con «hoy» o «ayer» solo habría un punto, así que se pide la última semana.
+export async function getEntityDailyInsights(
+  entityId: string, datePreset: string, bmId?: string, operationId?: string, force = false,
+): Promise<{ rows: DailyInsights[]; preset: string }> {
+  const preset = datePreset === "today" || datePreset === "yesterday" ? "last_7d" : datePreset;
+  const cacheKey = `meta:insdaily:${operationId ?? "all"}:${entityId}:${preset}`;
+  const staleKey = `${cacheKey}:stale`;
+  if (!force) {
+    const cached = await redis.get(cacheKey);
+    if (cached) return { rows: JSON.parse(cached), preset };
+  }
+  const { token } = await getActiveToken(bmId, operationId);
+  const params = new URLSearchParams({
+    fields: "spend,impressions,reach,frequency,clicks,ctr,cpc,cpm,inline_link_clicks,actions,action_values",
+    date_preset: preset,
+    time_increment: "1",
+    limit: "100",
+    access_token: token,
+  });
+  try {
+    const rows: DailyInsights[] = [];
+    let next: string | null = `${META_API_BASE}/${entityId}/insights?${params}`;
+    while (next) {
+      const json = (await metaRequest("GET", `${entityId}/insights`, next, undefined, 3)) as {
+        data?: DailyInsights[]; paging?: { next?: string };
+      };
+      rows.push(...(json.data ?? []));
+      next = json.paging?.next ?? null;
+    }
+    await redis.setex(cacheKey, 600, JSON.stringify(rows));
+    await redis.setex(staleKey, STALE_TTL, JSON.stringify(rows));
+    return { rows, preset };
+  } catch (e) {
+    if (isRateLimit(e)) {
+      const s = await redis.get(staleKey);
+      if (s) return { rows: JSON.parse(s), preset };
+    }
+    throw e;
+  }
+}
+
 export async function updateEntityStatus(
   entityId: string,
   status: "ACTIVE" | "PAUSED",

@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import {
   RefreshCw, Search, Copy, TrendingUp, Play, Pause, Briefcase, Building2,
   ExternalLink, X, CloudDownload, Loader2, CheckCircle2, AlertTriangle, Columns3,
-  ChevronDown, ChevronLeft, ChevronRight, ArrowDownWideNarrow, ArrowUpNarrowWide,
+  ChevronDown, ChevronLeft, ChevronRight, ArrowDownWideNarrow, ArrowUpNarrowWide, Info, BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,7 @@ import {
 import { DuplicateCampaignModal } from "@/components/duplicate-campaign-modal";
 import { useConfirm } from "@/components/use-confirm";
 import { DuplicateAdsetsModal } from "@/components/duplicate-adsets-modal";
+import { EntityChartsSheet, type ChartTarget } from "@/components/entity-charts";
 import { DuplicateAdsModal } from "@/components/duplicate-ads-modal";
 import { ErrorDetails, errorInfoOf, toastApiError, type ErrorInfo } from "@/components/error-details";
 import { openJobsDock } from "@/lib/jobs-dock-events";
@@ -447,11 +448,11 @@ function MobileMetricGrid({ list, metrics, currency, loading }: {
 
 /** Tarjeta de una campaña, ad set o anuncio. Tocarla entra al nivel siguiente, como la fila en desktop. */
 function MobileCard({
-  name, detail, metrics, currency, loading, stripe, selected, onToggle, status, onOpen, openLabel, onDuplicate, href,
+  name, detail, metrics, currency, loading, stripe, selected, onToggle, status, onOpen, openLabel, onDuplicate, onCharts, href,
 }: {
   name: string; detail?: ReactNode; metrics: Metrics | null; currency: string; loading: boolean; stripe: string;
   selected: boolean; onToggle: () => void; status: ReactNode;
-  onOpen?: () => void; openLabel?: string; onDuplicate?: () => void; href: string;
+  onOpen?: () => void; openLabel?: string; onDuplicate?: () => void; onCharts?: () => void; href: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
@@ -482,6 +483,11 @@ function MobileCard({
           <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} />
         </Button>
         <div className="ml-auto flex items-center">
+          {onCharts && (
+            <Button variant="ghost" size="sm" className="size-10 p-0 text-muted-foreground" aria-label={`Ver gráficas de ${name}`} onClick={onCharts}>
+              <BarChart3 className="h-4 w-4" />
+            </Button>
+          )}
           {onDuplicate && (
             <Button variant="ghost" size="sm" className="size-10 p-0 text-muted-foreground" aria-label={`Duplicar ${name}`} onClick={onDuplicate}>
               <Copy className="h-4 w-4" />
@@ -669,6 +675,24 @@ function SelectionBar({
   );
 }
 
+/** Icono «i» que muestra una ayuda al pasar el cursor o al tocarlo (también en móvil). */
+function InfoHint({ label, children }: { label: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button type="button" aria-label={label} aria-expanded={open} onClick={() => setOpen(o => !o)} onBlur={() => setOpen(false)}
+        className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground max-md:h-9 max-md:w-9">
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div role="tooltip" className="absolute right-0 top-full z-50 mt-1 w-72 rounded-md border bg-popover p-3 text-xs leading-relaxed text-popover-foreground shadow-md max-md:fixed max-md:inset-x-4 max-md:top-auto max-md:w-auto">
+          {children}
+        </div>
+      )}
+    </span>
+  );
+}
+
 /**
  * Indicador de frescura con «latido» + botón «Sincronizar con Meta».
  * Dice cuánto hace de la última lectura y cada cuánto se renueva el periodo elegido.
@@ -693,9 +717,14 @@ function FreshnessBar({ freshness, now, loading, onRefresh, datePreset, progress
             <span className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${loading ? "bg-primary" : dot}`} style={{ animationDuration: state === "ok" ? "2.4s" : "1.2s" }} />
             <span className={`relative inline-flex h-2 w-2 rounded-full ${loading ? "bg-primary" : dot}`} />
           </span>
-          <span><span className="max-md:hidden">Actualizado </span>{ago(freshness.syncedAt, now)}<span className="max-md:hidden"> · {plan}</span></span>
+          <span><span className="max-md:hidden">Actualizado </span>{ago(freshness.syncedAt, now)}</span>
         </span>
       )}
+      <InfoHint label="Cada cuánto se actualiza">
+        <p className="font-medium">Cuándo se actualizan los datos</p>
+        <p className="mt-1">Este periodo: <b>{plan}</b>.</p>
+        <p className="mt-1 text-muted-foreground">Calendario general: estructura y «hoy» a las 5:30, 12:00 y 17:30 (hora Colombia); ayer, 7 y 14 días a las 5:00; 30 días los lunes. «Sincronizar con Meta» trae ya todo lo de esta cuenta.</p>
+      </InfoHint>
       <Button variant="outline" size="sm" className={`h-7 px-2 text-xs bg-card max-md:h-10 max-md:px-3 ${ageMin > 15 && !loading ? "motion-safe:animate-bounce" : ""}`} onClick={onRefresh} disabled={loading || !!progress}
         title="Trae de Meta las campañas, ad sets, anuncios y métricas de esta cuenta, sin usar copias guardadas.">
         {loading || progress ? <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5 mr-1" />}
@@ -939,6 +968,7 @@ function ManagerInner() {
   const [showDuplicateAdsetsModal, setShowDuplicateAdsetsModal] = useState(false);
   const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(new Set());
   const [showDuplicateAdsModal, setShowDuplicateAdsModal] = useState(false);
+  const [chartTarget, setChartTarget] = useState<ChartTarget | null>(null);
 
   // Snapshots para caché client-side (sobreviven re-renders, no recargas de página)
   // Un Map por nivel, con una entrada por clave (campaña, ad set, periodo): volver a una
@@ -1397,9 +1427,13 @@ function ManagerInner() {
   const totals = sumMetrics(visRows.map(r => ({ ins: insightsMap[r.id], factor: 1 })));
 
   /** Botones visibles por fila. */
-  const rowActions = (lvl: Level, id: string, extra?: React.ReactNode) => (
+  const rowActions = (lvl: Level, id: string, name: string, extra?: React.ReactNode) => (
     <div className="-ml-1.5 flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
       {extra}
+      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Ver gráficas" aria-label="Ver gráficas"
+        onClick={() => setChartTarget({ level: lvl, id, name, accountId, bmId: bmId ?? undefined, currency })}>
+        <BarChart3 className="h-3.5 w-3.5" />
+      </Button>
       <a
         href={adsManagerUrl(lvl, accountId, id)} target="_blank" rel="noreferrer"
         className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -1595,6 +1629,7 @@ function ManagerInner() {
                     : level === "adset" ? () => { setSelectedAdsetIds(new Set([r.id])); setShowDuplicateAdsetsModal(true); }
                       : creative_id ? () => { setSelectedAdIds(new Set([r.id])); setShowDuplicateAdsModal(true); } : undefined
                 }
+                onCharts={() => setChartTarget({ level, id: r.id, name: r.name, accountId: accountId!, bmId: bmId ?? undefined, currency })}
               />
             );
           })}
@@ -1655,7 +1690,7 @@ function ManagerInner() {
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
-                        {rowActions("campaign", c.id, (
+                        {rowActions("campaign", c.id, c.name, (
                           <>
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar campaña" aria-label="Duplicar campaña"
                               onClick={() => setDuplicateTargets([c])}>
@@ -1696,7 +1731,7 @@ function ManagerInner() {
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
-                        {rowActions("adset", a.id, (
+                        {rowActions("adset", a.id, a.name, (
                           <>
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar ad set" aria-label="Duplicar ad set"
                               onClick={() => { setSelectedAdsetIds(new Set([a.id])); setShowDuplicateAdsetsModal(true); }}>
@@ -1737,7 +1772,7 @@ function ManagerInner() {
                           loadingSet={loadingStatus} onToggle={toggleStatus} />
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_ACTIONS}`}>
-                        {rowActions("ad", ad.id, ad.creative_id ? (
+                        {rowActions("ad", ad.id, ad.name, ad.creative_id ? (
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar anuncio" aria-label="Duplicar anuncio"
                             onClick={() => { setSelectedAdIds(new Set([ad.id])); setShowDuplicateAdsModal(true); }}>
                             <Copy className="h-3.5 w-3.5" />
@@ -1772,6 +1807,7 @@ function ManagerInner() {
       )}
 
       {/* Modales */}
+      <EntityChartsSheet target={chartTarget} datePreset={datePreset} onClose={() => setChartTarget(null)} />
       {duplicateTargets && duplicateTargets.length > 0 && (
         <DuplicateCampaignModal
           campaigns={duplicateTargets} accountId={accountId} bmId={bmId} currency={currency}
@@ -1831,6 +1867,7 @@ function GlobalCampaignsView() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [dupTargets, setDupTargets] = useState<GRow[] | null>(null);
+  const [chartTarget, setChartTarget] = useState<ChartTarget | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const columnState = useColumns();
   const { columns } = columnState;
@@ -2063,6 +2100,7 @@ function GlobalCampaignsView() {
               onOpen={() => openCampaign(r)}
               openLabel="Ad sets"
               onDuplicate={() => setDupTargets([r])}
+              onCharts={() => setChartTarget({ level: "campaign", id: r.camp.id, name: r.camp.name, accountId: r.accId, bmId: r.bmId, currency: r.currency ?? "USD" })}
             />
           );
         })}
@@ -2118,6 +2156,10 @@ function GlobalCampaignsView() {
                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Duplicar campaña" aria-label="Duplicar campaña" onClick={() => setDupTargets([r])}>
                         <Copy className="h-3.5 w-3.5" />
                       </Button>
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Ver gráficas" aria-label="Ver gráficas"
+                        onClick={() => setChartTarget({ level: "campaign", id: r.camp.id, name: r.camp.name, accountId: r.accId, bmId: r.bmId, currency: r.currency ?? "USD" })}>
+                        <BarChart3 className="h-3.5 w-3.5" />
+                      </Button>
                       <a
                         href={adsManagerUrl("campaign", r.accId, r.camp.id)} target="_blank" rel="noreferrer"
                         className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -2137,6 +2179,7 @@ function GlobalCampaignsView() {
         </Table>
       </div>
 
+      <EntityChartsSheet target={chartTarget} datePreset={datePreset} onClose={() => setChartTarget(null)} />
       {dupTargets && dupTargets.length > 0 && (
         <DuplicateCampaignModal
           campaigns={dupTargets.map(r => ({ ...r.camp, accountId: r.accId, bmId: r.bmId }))}
