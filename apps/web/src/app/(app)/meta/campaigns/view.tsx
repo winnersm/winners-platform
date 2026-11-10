@@ -24,6 +24,7 @@ import { DuplicateCampaignModal } from "@/components/duplicate-campaign-modal";
 import { useConfirm } from "@/components/use-confirm";
 import { DuplicateAdsetsModal } from "@/components/duplicate-adsets-modal";
 import { EntityChartsSheet, type ChartTarget } from "@/components/entity-charts";
+import { MetricsSummary } from "@/components/metrics-summary";
 import { DuplicateAdsModal } from "@/components/duplicate-ads-modal";
 import { ErrorDetails, errorInfoOf, toastApiError, type ErrorInfo } from "@/components/error-details";
 import { openJobsDock } from "@/lib/jobs-dock-events";
@@ -1528,8 +1529,16 @@ function ManagerInner() {
         </div>
       )}
 
+      {/* Resumen de la vista (mismas tarjetas que Rendimiento, con lo que se ve aquí) */}
+      <div className="pt-3">
+        <MetricsSummary
+          scope={noun} loading={loadingInsights}
+          items={(level === "campaign" ? campaigns : level === "adset" ? adsets : ads).map(e => ({ ins: insightsMap[e.id], currency }))}
+        />
+      </div>
+
       {/* Toolbar */}
-      <div className="flex items-center gap-2 pt-3 pb-2 flex-wrap">
+      <div className="flex items-center gap-2 pb-2 flex-wrap">
         <div className="relative max-md:w-full">
           <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground max-md:top-3.5" />
           <Input
@@ -2024,6 +2033,12 @@ function GlobalCampaignsView() {
           />
         </div>
       </div>
+
+      {/* Resumen de todas las cuentas, por moneda y por cuenta publicitaria */}
+      <MetricsSummary
+        scope="campañas" loading={loading} byAccount
+        items={rows.map(r => ({ ins: insMap[r.camp.id], currency: r.currency ?? "USD", account: { id: r.accId, name: r.accName } }))}
+      />
 
       <div className="flex items-center gap-2 pt-1 pb-2 flex-wrap">
         <div className="relative max-md:w-full">
