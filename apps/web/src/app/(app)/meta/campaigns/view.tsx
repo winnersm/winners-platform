@@ -657,9 +657,9 @@ function StatusAction({ target, applicable, total, busy, spinning, onClick }: {
 
 /** Barra que aparece al seleccionar: acciones masivas a mano. */
 function SelectionBar({
-  count, statuses, hidden = 0, noun, busy, extra, onDuplicate, onStatus, onClear,
+  count, statuses, hidden = 0, noun, busy, onDuplicate, onStatus, onClear,
 }: {
-  count: number; statuses: string[]; hidden?: number; noun: string; busy: boolean; extra?: ReactNode;
+  count: number; statuses: string[]; hidden?: number; noun: string; busy: boolean;
   onDuplicate?: () => void; onStatus: (s: EntityStatus) => void; onClear: () => void;
 }) {
   const { confirmar, dialogo } = useConfirm();
@@ -684,7 +684,6 @@ function SelectionBar({
         <span>{noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-warning"> · {hidden} fuera del filtro actual</span> : null}</span>
       </span>
       <div className="flex items-center gap-1.5 flex-wrap max-md:order-3 max-md:w-full max-md:flex-nowrap">
-        {extra}
         {onDuplicate && (
           <>
             <Button size="sm" className="h-7 text-xs shadow-sm shadow-primary/25 max-md:h-10 max-md:flex-1" onClick={onDuplicate} disabled={busy}>
@@ -991,7 +990,7 @@ function ManagerInner() {
   const staleInfo = dataMeta?.staleInfo ?? null;
   const [now, setNow] = useState(() => Date.now());
 
-  const [statusFilter, setStatusFilter] = useState("ACTIVE");
+  const [statusFilter, setStatusFilter] = useState("ALL");
   const [nameFilter, setNameFilter] = useState("");
   const [duplicateTargets, setDuplicateTargets] = useState<Campaign[] | null>(null);
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(new Set());
@@ -1185,20 +1184,20 @@ function ManagerInner() {
   async function drillAdsets(campaign: Selection) {
     setSelCampaign({ id: campaign.id, name: campaign.name });
     setSelAdset(null); setCampScope(null);
-    setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
+    setLevel("adset"); setNameFilter(""); setStatusFilter("ALL");
     await showLevel("adset", `adsets:${accountId}:${campaign.id}`, () => loadAdsets(campaign.id));
   }
 
   async function drillAds(adset: AdSet) {
     setSelAdset({ id: adset.id, name: adset.name });
-    setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
+    setLevel("ad"); setNameFilter(""); setStatusFilter("ALL");
     await showLevel("ad", `ads:${accountId}:${adset.id}`, () => loadAds(adset.id));
   }
 
   // Tabs siempre clickeables. Conservan la campaña / ad set elegidos para no perder el contexto.
   async function goToCampaigns() {
     setSelCampaign(null); setSelAdset(null); setCampScope(null);
-    setLevel("campaign"); setNameFilter(""); setStatusFilter("ACTIVE");
+    setLevel("campaign"); setNameFilter(""); setStatusFilter("ALL");
     await showLevel("campaign", accountId!, () => loadCampaigns());
   }
 
@@ -1216,7 +1215,7 @@ function ManagerInner() {
 
   async function goToAdsets() {
     const scope = scopeFromSelection();
-    setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
+    setLevel("adset"); setNameFilter(""); setStatusFilter("ALL");
     // Con varias campañas se traen los de toda la cuenta y se filtran aquí.
     const cid = scope ? undefined : selCampaign?.id;
     await showLevel("adset", `adsets:${accountId}:${cid ?? "all"}`, () => loadAdsets(cid));
@@ -1225,7 +1224,7 @@ function ManagerInner() {
   async function goToAds() {
     const fromCampaigns = level === "campaign";
     const scope = scopeFromSelection();
-    setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
+    setLevel("ad"); setNameFilter(""); setStatusFilter("ALL");
     // Con un ad set elegido, sus anuncios; si no, los de la campaña; sin campaña (o con
     // varias, que se filtran aquí), toda la cuenta.
     const aid = scope && fromCampaigns ? undefined : selAdset?.id;
@@ -1454,11 +1453,12 @@ function ManagerInner() {
   /** Puntito de la campaña a la que pertenece la fila (solo con varias campañas elegidas). */
   const rowScope = (r: { campaign_id?: string; adset_id?: string }) => scopeOf(r.campaign_id, r.adset_id);
 
-  const tabBtn = (id: Level, label: string, short: string, active: boolean, onClick: () => void) => (
+  // Con 2 o más seleccionados en un nivel, su pestaña lo indica con un contador.
+  const tabBtn = (id: Level, label: string, short: string, active: boolean, onClick: () => void, selCount: number, selNoun: string) => (
     <button
       key={id}
       onClick={onClick}
-      className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap max-md:flex-1 max-md:px-2 max-md:py-3 ${
+      className={`inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap max-md:flex-1 max-md:px-2 max-md:py-3 ${
         active
           ? "border-primary text-primary"
           : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
@@ -1466,6 +1466,15 @@ function ManagerInner() {
     >
       <span className="max-md:hidden">{label}</span>
       <span className="md:hidden">{short}</span>
+      {selCount >= 2 && (
+        <span
+          className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold tabular-nums text-primary-foreground"
+          title={`${selCount} ${selNoun}`}
+          aria-label={`${selCount} ${selNoun}`}
+        >
+          {selCount}
+        </span>
+      )}
     </button>
   );
 
@@ -1553,9 +1562,9 @@ function ManagerInner() {
       {/* Tabs */}
       <div className="flex items-center gap-0 border-b bg-card -mx-5 px-5 max-md:flex-wrap">
         <div className="contents max-md:flex max-md:w-full">
-          {tabBtn("campaign", "Campañas", "Campañas", level === "campaign", goToCampaigns)}
-          {tabBtn("adset", adsetTabLabel, "Ad Sets", level === "adset", goToAdsets)}
-          {tabBtn("ad", adTabLabel, "Anuncios", level === "ad", goToAds)}
+          {tabBtn("campaign", "Campañas", "Campañas", level === "campaign", goToCampaigns, selectedCampaignIds.size, "campañas seleccionadas")}
+          {tabBtn("adset", adsetTabLabel, "Ad Sets", level === "adset", goToAdsets, selectedAdsetIds.size, "ad sets seleccionados")}
+          {tabBtn("ad", adTabLabel, "Anuncios", level === "ad", goToAds, selectedAdIds.size, "anuncios seleccionados")}
         </div>
 
         <div className="ml-auto flex items-center gap-2 py-1 max-md:ml-0 max-md:w-full">
@@ -1658,16 +1667,6 @@ function ManagerInner() {
         hidden={[...sel].filter(id => !visIds.includes(id)).length}
         noun={level === "campaign" ? "campaña" : level === "adset" ? "ad set" : "anuncio"}
         busy={bulkBusy}
-        extra={level === "campaign" ? (
-          <>
-            <Button size="sm" variant="outline" className="h-7 text-xs bg-card max-md:h-10 max-md:flex-1" onClick={goToAdsets} disabled={bulkBusy}>
-              Ver ad sets
-            </Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs bg-card max-md:h-10 max-md:flex-1" onClick={goToAds} disabled={bulkBusy}>
-              Ver anuncios
-            </Button>
-          </>
-        ) : undefined}
         onDuplicate={
           level === "campaign" ? () => setDuplicateTargets(campaigns.filter(c => selectedCampaignIds.has(c.id)))
             : level === "adset" ? () => setShowDuplicateAdsetsModal(true)
@@ -1969,7 +1968,7 @@ function GlobalCampaignsView() {
   const [refreshing, setRefreshing] = useState(false);
   const [datePreset, setDatePreset] = useState("today");
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("ACTIVE");
+  const [statusFilter, setStatusFilter] = useState("ALL");
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>({ key: "spend", dir: "desc" });
   const [oldest, setOldest] = useState<string | null>(null);
   const [problems, setProblems] = useState<AcctProblem[]>([]);
