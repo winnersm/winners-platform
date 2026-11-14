@@ -20,6 +20,7 @@ import {
   DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { DuplicateCampaignModal } from "@/components/duplicate-campaign-modal";
 import { useConfirm } from "@/components/use-confirm";
 import { DuplicateAdsetsModal } from "@/components/duplicate-adsets-modal";
@@ -52,6 +53,31 @@ interface Insights {
 type Level = "campaign" | "adset" | "ad";
 type Selection = { id: string; name: string };
 type EntityStatus = "ACTIVE" | "PAUSED";
+/** Campaña elegida para ver juntos sus ad sets y anuncios, con el color que la identifica. */
+type ScopeCampaign = Selection & { color: string };
+
+// Colores distinguibles entre sí y legibles en claro y oscuro; se repiten pasada la décima.
+const SCOPE_COLORS = ["#3b82f6", "#f97316", "#10b981", "#a855f7", "#ef4444", "#eab308", "#06b6d4", "#ec4899", "#84cc16", "#6366f1"];
+
+/** Puntito con el color de la campaña; al pasar el cursor muestra su nombre. */
+function CampaignDot({ camp, className = "" }: { camp: ScopeCampaign; className?: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            aria-label={`Campaña: ${camp.name}`}
+            className={`inline-block h-2.5 w-2.5 shrink-0 cursor-help rounded-full ring-2 ring-background ${className}`}
+            style={{ backgroundColor: camp.color }}
+            onClick={e => e.stopPropagation()}
+          />
+        }
+      />
+      <TooltipContent><span className="break-words">Campaña: {camp.name}</span></TooltipContent>
+    </Tooltip>
+  );
+}
 
 /** Cómo llegaron los datos: copia de DB, Meta en vivo, o caché por límite de Meta. */
 interface Freshness { syncedAt: string | null; source: string | null }
@@ -449,9 +475,9 @@ function MobileMetricGrid({ list, metrics, currency, loading }: {
 
 /** Tarjeta de una campaña, ad set o anuncio. Tocarla entra al nivel siguiente, como la fila en desktop. */
 function MobileCard({
-  name, detail, metrics, currency, loading, stripe, selected, onToggle, status, onOpen, openLabel, onDuplicate, onCharts, href,
+  name, tag, detail, metrics, currency, loading, stripe, selected, onToggle, status, onOpen, openLabel, onDuplicate, onCharts, href,
 }: {
-  name: string; detail?: ReactNode; metrics: Metrics | null; currency: string; loading: boolean; stripe: string;
+  name: string; tag?: ReactNode; detail?: ReactNode; metrics: Metrics | null; currency: string; loading: boolean; stripe: string;
   selected: boolean; onToggle: () => void; status: ReactNode;
   onOpen?: () => void; openLabel?: string; onDuplicate?: () => void; onCharts?: () => void; href: string;
 }) {
@@ -468,6 +494,7 @@ function MobileCard({
         </label>
         <div className="min-w-0 flex-1 pt-2">
           <p className="text-sm font-medium leading-snug break-words line-clamp-2">{name}</p>
+          {tag ? <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">{tag}</div> : null}
           {detail ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p> : null}
         </div>
         <div className="shrink-0 pt-2.5 pl-2" onClick={stop}>{status}</div>
@@ -630,9 +657,9 @@ function StatusAction({ target, applicable, total, busy, spinning, onClick }: {
 
 /** Barra que aparece al seleccionar: acciones masivas a mano. */
 function SelectionBar({
-  count, statuses, hidden = 0, noun, busy, onDuplicate, onStatus, onClear,
+  count, statuses, hidden = 0, noun, busy, extra, onDuplicate, onStatus, onClear,
 }: {
-  count: number; statuses: string[]; hidden?: number; noun: string; busy: boolean;
+  count: number; statuses: string[]; hidden?: number; noun: string; busy: boolean; extra?: ReactNode;
   onDuplicate?: () => void; onStatus: (s: EntityStatus) => void; onClear: () => void;
 }) {
   const { confirmar, dialogo } = useConfirm();
@@ -657,6 +684,7 @@ function SelectionBar({
         <span>{noun}{count > 1 ? "s" : ""} seleccionad{noun.endsWith("a") ? "a" : "o"}{count > 1 ? "s" : ""}{hidden > 0 ? <span className="font-normal text-warning"> · {hidden} fuera del filtro actual</span> : null}</span>
       </span>
       <div className="flex items-center gap-1.5 flex-wrap max-md:order-3 max-md:w-full max-md:flex-nowrap">
+        {extra}
         {onDuplicate && (
           <>
             <Button size="sm" className="h-7 text-xs shadow-sm shadow-primary/25 max-md:h-10 max-md:flex-1" onClick={onDuplicate} disabled={busy}>
@@ -933,6 +961,8 @@ function ManagerInner() {
     campaignParam ? { id: campaignParam, name: searchParams.get("campaignName") ?? campaignParam } : null,
   );
   const [selAdset, setSelAdset] = useState<Selection | null>(null);
+  // Varias campañas marcadas al pasar a Ad Sets/Anuncios: se ven solo las suyas, con su color.
+  const [campScope, setCampScope] = useState<ScopeCampaign[] | null>(null);
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -1154,7 +1184,7 @@ function ManagerInner() {
 
   async function drillAdsets(campaign: Selection) {
     setSelCampaign({ id: campaign.id, name: campaign.name });
-    setSelAdset(null);
+    setSelAdset(null); setCampScope(null);
     setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
     await showLevel("adset", `adsets:${accountId}:${campaign.id}`, () => loadAdsets(campaign.id));
   }
@@ -1167,21 +1197,39 @@ function ManagerInner() {
 
   // Tabs siempre clickeables. Conservan la campaña / ad set elegidos para no perder el contexto.
   async function goToCampaigns() {
-    setSelCampaign(null); setSelAdset(null);
+    setSelCampaign(null); setSelAdset(null); setCampScope(null);
     setLevel("campaign"); setNameFilter(""); setStatusFilter("ACTIVE");
     await showLevel("campaign", accountId!, () => loadCampaigns());
   }
 
+  /** Al salir de Campañas con campañas marcadas, ad sets y anuncios se limitan a ellas. */
+  function scopeFromSelection(): ScopeCampaign[] | null {
+    if (level !== "campaign") return campScope;
+    const picked = campaigns.filter(c => selectedCampaignIds.has(c.id));
+    const next = picked.length
+      ? picked.map((c, i) => ({ id: c.id, name: c.name, color: SCOPE_COLORS[i % SCOPE_COLORS.length] }))
+      : null;
+    setCampScope(next);
+    if (next) { setSelCampaign(null); setSelAdset(null); }
+    return next;
+  }
+
   async function goToAdsets() {
+    const scope = scopeFromSelection();
     setLevel("adset"); setNameFilter(""); setStatusFilter("ACTIVE");
-    const cid = selCampaign?.id;
+    // Con varias campañas se traen los de toda la cuenta y se filtran aquí.
+    const cid = scope ? undefined : selCampaign?.id;
     await showLevel("adset", `adsets:${accountId}:${cid ?? "all"}`, () => loadAdsets(cid));
   }
 
   async function goToAds() {
+    const fromCampaigns = level === "campaign";
+    const scope = scopeFromSelection();
     setLevel("ad"); setNameFilter(""); setStatusFilter("ACTIVE");
-    // Con un ad set elegido, sus anuncios; si no, los de la campaña; sin campaña, toda la cuenta.
-    const aid = selAdset?.id, cid = selCampaign?.id;
+    // Con un ad set elegido, sus anuncios; si no, los de la campaña; sin campaña (o con
+    // varias, que se filtran aquí), toda la cuenta.
+    const aid = scope && fromCampaigns ? undefined : selAdset?.id;
+    const cid = scope ? undefined : selCampaign?.id;
     await showLevel("ad", `ads:${accountId}:${aid ?? (cid ? `c:${cid}` : "all")}`, () => loadAds(aid, false, cid));
   }
 
@@ -1365,9 +1413,18 @@ function ManagerInner() {
     });
   }
 
+  // Campañas elegidas: cada ad set / anuncio sabe a cuál pertenece (los anuncios sin
+  // campaign_id, por su ad set).
+  const scopeMap = new Map((campScope ?? []).map(c => [c.id, c]));
+  const adsetCamp = new Map(adsets.filter(a => a.campaign_id).map(a => [a.id, a.campaign_id!]));
+  const scopeOf = (campaignId?: string, adsetId?: string): ScopeCampaign | undefined =>
+    campScope ? scopeMap.get(campaignId ?? (adsetId ? adsetCamp.get(adsetId) ?? "" : "")) : undefined;
+  const scopedAdsets = campScope ? adsets.filter(a => scopeOf(a.campaign_id)) : adsets;
+  const scopedAds = campScope ? ads.filter(a => scopeOf(a.campaign_id, a.adset_id)) : ads;
+
   const visCampaigns = applySort(filterData(campaigns));
-  const visAdsets = applySort(filterData(adsets));
-  const visAds = applySort(filterData(ads));
+  const visAdsets = applySort(filterData(scopedAdsets));
+  const visAds = applySort(filterData(scopedAds));
 
   if (!accountId) {
     return <GlobalCampaignsView />;
@@ -1385,12 +1442,17 @@ function ManagerInner() {
 
   // ── Tab labels ────────────────────────────────────────────────────────────
 
-  const adsetTabLabel = level === "adset" && selCampaign
-    ? `Ad Sets · ${selCampaign.name.length > 18 ? selCampaign.name.slice(0, 18) + "…" : selCampaign.name}`
-    : "Ad Sets";
+  const scopeLabel = campScope ? `${campScope.length} campaña${campScope.length > 1 ? "s" : ""}` : "";
+  const adsetTabLabel = level === "adset" && campScope ? `Ad Sets · ${scopeLabel}`
+    : level === "adset" && selCampaign
+      ? `Ad Sets · ${selCampaign.name.length > 18 ? selCampaign.name.slice(0, 18) + "…" : selCampaign.name}`
+      : "Ad Sets";
   const adTabLabel = level === "ad" && selAdset
     ? `Anuncios · ${selAdset.name.length > 18 ? selAdset.name.slice(0, 18) + "…" : selAdset.name}`
-    : "Anuncios";
+    : level === "ad" && campScope ? `Anuncios · ${scopeLabel}` : "Anuncios";
+
+  /** Puntito de la campaña a la que pertenece la fila (solo con varias campañas elegidas). */
+  const rowScope = (r: { campaign_id?: string; adset_id?: string }) => scopeOf(r.campaign_id, r.adset_id);
 
   const tabBtn = (id: Level, label: string, short: string, active: boolean, onClick: () => void) => (
     <button
@@ -1446,7 +1508,8 @@ function ManagerInner() {
   );
 
   // Nivel superior al que se vuelve en móvil.
-  const parentName = level === "ad" ? selAdset?.name : level === "adset" ? selCampaign?.name : undefined;
+  const parentName = level === "ad" ? (selAdset?.name ?? (campScope ? scopeLabel : undefined))
+    : level === "adset" ? (campScope ? scopeLabel : selCampaign?.name) : undefined;
   function goBack() {
     if (level === "adset") void goToCampaigns();
     else if (selCampaign) void drillAdsets(selCampaign);
@@ -1461,6 +1524,7 @@ function ManagerInner() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
+    <TooltipProvider>
     <div className="space-y-0">
 
       {/* Cuenta actual */}
@@ -1529,11 +1593,26 @@ function ManagerInner() {
         </div>
       )}
 
+      {/* Varias campañas elegidas: leyenda de colores */}
+      {campScope && level !== "campaign" && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-2 text-xs text-muted-foreground">
+          <span>Viendo {campScope.length === 1 ? "la campaña" : `${campScope.length} campañas`}</span>
+          {campScope.map(c => (
+            <span key={c.id} className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border bg-card px-2 py-0.5 font-medium text-foreground md:max-w-[20rem]" title={c.name}>
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: c.color }} aria-hidden />
+              <span className="truncate">{c.name}</span>
+            </span>
+          ))}
+          {level === "ad" && selAdset && (<><ChevronRight className="h-3 w-3" /><span className="rounded-md border bg-card px-2 py-0.5 font-medium text-foreground max-w-full md:max-w-[24rem] truncate" title={selAdset.name}>{selAdset.name}</span></>)}
+          <button className="text-primary hover:underline" onClick={goToCampaigns}>Cambiar</button>
+        </div>
+      )}
+
       {/* Resumen de la vista (mismas tarjetas que Rendimiento, con lo que se ve aquí) */}
       <div className="pt-3">
         <MetricsSummary
           scope={noun} loading={loadingInsights}
-          items={(level === "campaign" ? campaigns : level === "adset" ? adsets : ads).map(e => ({ ins: insightsMap[e.id], currency }))}
+          items={(level === "campaign" ? campaigns : level === "adset" ? scopedAdsets : scopedAds).map(e => ({ ins: insightsMap[e.id], currency }))}
         />
       </div>
 
@@ -1579,6 +1658,16 @@ function ManagerInner() {
         hidden={[...sel].filter(id => !visIds.includes(id)).length}
         noun={level === "campaign" ? "campaña" : level === "adset" ? "ad set" : "anuncio"}
         busy={bulkBusy}
+        extra={level === "campaign" ? (
+          <>
+            <Button size="sm" variant="outline" className="h-7 text-xs bg-card max-md:h-10 max-md:flex-1" onClick={goToAdsets} disabled={bulkBusy}>
+              Ver ad sets
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs bg-card max-md:h-10 max-md:flex-1" onClick={goToAds} disabled={bulkBusy}>
+              Ver anuncios
+            </Button>
+          </>
+        ) : undefined}
         onDuplicate={
           level === "campaign" ? () => setDuplicateTargets(campaigns.filter(c => selectedCampaignIds.has(c.id)))
             : level === "adset" ? () => setShowDuplicateAdsetsModal(true)
@@ -1622,9 +1711,14 @@ function ManagerInner() {
           {visRows.map(r => {
             const ins = insightsMap[r.id];
             const { daily_budget, lifetime_budget, creative_id } = r as Partial<Campaign> & Partial<Ad>;
+            const sc = level === "campaign" ? undefined : rowScope(r as Partial<Ad>);
             return (
               <MobileCard
                 key={r.id} name={r.name}
+                tag={sc ? (<>
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: sc.color }} aria-hidden />
+                  <span className="truncate">{sc.name}</span>
+                </>) : undefined}
                 detail={daily_budget ? `Presupuesto diario ${fmtBudget(daily_budget, currency)}` : lifetime_budget ? `Presupuesto total ${fmtBudget(lifetime_budget, currency)}` : undefined}
                 metrics={calcMetrics(ins)} currency={currency} loading={loadingInsights}
                 stripe={stripeClass(ins, !loadingInsights)}
@@ -1750,7 +1844,10 @@ function ManagerInner() {
                         ))}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight whitespace-normal break-words line-clamp-2 group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
+                        <div className="flex items-start gap-1.5">
+                          {(() => { const sc = rowScope(a); return sc ? <CampaignDot camp={sc} className="mt-0.5" /> : null; })()}
+                          <p className="min-w-0 font-medium text-xs leading-tight whitespace-normal break-words line-clamp-2 group-hover:text-primary transition-colors" title={a.name}>{a.name}</p>
+                        </div>
                       </TableCell>
                       <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
@@ -1789,7 +1886,10 @@ function ManagerInner() {
                         ) : null)}
                       </TableCell>
                       <TableCell className={`py-2 ${STICKY_NAME}`}>
-                        <p className="font-medium text-xs leading-tight whitespace-normal break-words line-clamp-2" title={ad.name}>{ad.name}</p>
+                        <div className="flex items-start gap-1.5">
+                          {(() => { const sc = rowScope(ad); return sc ? <CampaignDot camp={sc} className="mt-0.5" /> : null; })()}
+                          <p className="min-w-0 font-medium text-xs leading-tight whitespace-normal break-words line-clamp-2" title={ad.name}>{ad.name}</p>
+                        </div>
                       </TableCell>
                       <MetricCells metrics={calcMetrics(ins)} loading={loadingInsights} columns={columns} currency={currency} />
                       <TableCell className="py-2 text-[10px] text-muted-foreground font-mono truncate max-w-[80px]">
@@ -1849,6 +1949,7 @@ function ManagerInner() {
 
       {dialogo}
     </div>
+    </TooltipProvider>
   );
 }
 
