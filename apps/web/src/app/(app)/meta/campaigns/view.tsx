@@ -536,22 +536,15 @@ function MobileCard({
   );
 }
 
-/** Total de lo visible y casilla de seleccionar todo, encima de las tarjetas. */
-function MobileSummary({ title, note, metrics, currency, loading, allSel, someSel, onToggleAll }: {
-  title: string; note?: string; metrics: Metrics; currency: string; loading: boolean;
-  allSel: boolean; someSel: boolean; onToggleAll: () => void;
+/** Casilla de seleccionar todo encima de las tarjetas. Los totales ya están en el resumen superior. */
+function MobileSummary({ title, allSel, someSel, onToggleAll }: {
+  title: string; allSel: boolean; someSel: boolean; onToggleAll: () => void;
 }) {
   return (
-    <>
-      <div className="rounded-lg border bg-muted p-3">
-        <p className="mb-2 text-xs font-semibold">{title}{note ? <span className="font-normal text-muted-foreground"> · {note}</span> : null}</p>
-        <MobileMetricGrid list={MOBILE_PRIMARY} metrics={metrics} currency={currency} loading={loading} />
-      </div>
-      <label className="flex h-11 w-fit cursor-pointer items-center gap-2.5 pl-3 pr-3 text-xs text-muted-foreground">
-        <Checkbox checked={allSel} indeterminate={someSel} onToggle={onToggleAll} label="Seleccionar todo" className="h-5 w-5" />
-        Seleccionar todo
-      </label>
-    </>
+    <label className="flex h-11 w-fit cursor-pointer items-center gap-2.5 pl-3 pr-3 text-xs text-muted-foreground">
+      <Checkbox checked={allSel} indeterminate={someSel} onToggle={onToggleAll} label="Seleccionar todo" className="h-5 w-5" />
+      Seleccionar todo <span className="text-muted-foreground/70">· {title}</span>
+    </label>
   );
 }
 
@@ -1699,7 +1692,7 @@ function ManagerInner() {
         <div className={`space-y-2 md:hidden ${sel.size > 0 ? "pb-28" : ""}`}>
           {visRows.length > 0 ? (
             <MobileSummary
-              title={`Total · ${visRows.length} ${noun}`} metrics={totals} currency={currency} loading={loadingInsights}
+              title={`${visRows.length} ${noun}`}
               allSel={allSel} someSel={someSel} onToggleAll={toggleAll}
             />
           ) : (
@@ -2194,8 +2187,7 @@ function GlobalCampaignsView() {
       <div className={`space-y-2 md:hidden ${selected.size > 0 ? "pb-28" : ""}`}>
         {vis.length > 0 ? (
           <MobileSummary
-            title={`Total · ${vis.length} campañas`} note={otherCurrencies.length > 0 ? "en USD aprox." : undefined}
-            metrics={totals} currency="USD" loading={false}
+            title={`${vis.length} campañas`}
             allSel={allSel} someSel={someSel} onToggleAll={() => setSelected(allSel ? new Set() : new Set(visKeys))}
           />
         ) : (

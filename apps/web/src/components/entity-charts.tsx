@@ -6,6 +6,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorDetails, errorInfoOf, type ErrorInfo } from "@/components/error-details";
+import { periodRange, type DateRange } from "@/lib/insight-periods";
 
 // Panel de gráficas de una campaña, ad set o anuncio: lo que un media buyer mira para
 // monitorear (gasto vs ingresos, ganancia, ROI, CPA, CTR, CPC, CPM, frecuencia, embudo).
@@ -67,6 +68,27 @@ function toDay(r: DailyRow): Day {
     landing: pick(r.actions, LANDING), atc: pick(r.actions, ADD_TO_CART), checkout: pick(r.actions, CHECKOUT),
   };
 }
+
+/** Día vacío: Meta omite los días sin entrega; se rellenan para que el eje cubra todo el periodo. */
+const emptyDay = (date: string): Day => ({
+  date, spend: 0, revenue: 0, profit: 0, roi: null, roas: null, purchases: 0, cpa: null, ctr: null, cpc: null, cpm: null,
+  frequency: null, impressions: 0, clicks: 0, linkClicks: 0, landing: 0, atc: 0, checkout: 0,
+});
+const todayBogota = () =>
+  new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "America/Bogota" }).format(new Date());
+function fillDays(days: Day[], range: DateRange | null): Day[] {
+  if (!range || days.length === 0) return days;
+  const by = new Map(days.map(d => [d.date, d]));
+  const out: Day[] = [];
+  for (let t = Date.parse(`${range.since}T00:00:00Z`), end = Date.parse(`${range.until}T00:00:00Z`); t <= end; t += 86_400_000) {
+    const ymd = new Date(t).toISOString().slice(0, 10);
+    out.push(by.get(ymd) ?? emptyDay(ymd));
+  }
+  // Por si Meta usa otra zona horaria y trae un día fuera del rango calculado.
+  for (const d of days) if (d.date < range.since || d.date > range.until) out.push(d);
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+const fmtYmd = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString("es-CO", { day: "numeric", month: "short", timeZone: "UTC" });
 
 const RANGES = [
   { value: "last_7d", label: "7 días" },
@@ -343,7 +365,9 @@ export function EntityChartsSheet({ target, datePreset, onClose }: {
 
   const currency = target?.currency ?? "USD";
   const money = useMemo(() => makeMoney(currency), [currency]);
-  const days = useMemo(() => (rows ?? []).map(toDay).sort((a, b) => a.date.localeCompare(b.date)), [rows]);
+  const period = useMemo(() => periodRange(range, todayBogota()), [range]);
+  const days = useMemo(() => fillDays((rows ?? []).map(toDay), period), [rows, period]);
+  const activeDays = useMemo(() => (rows ?? []).filter(r => parseFloat(r.spend || "0") > 0).length, [rows]);
   const dates = days.map(d => d.date);
 
   const t = useMemo(() => {
@@ -395,6 +419,13 @@ export function EntityChartsSheet({ target, datePreset, onClose }: {
               <Table2 className="mr-1 h-3.5 w-3.5" />{table ? "Ver gráficas" : "Ver tabla"}
             </Button>
           </div>
+
+          {period && (
+            <p className="px-4 text-[11px] text-muted-foreground">
+              {fmtYmd(period.since)} – {fmtYmd(period.until)}
+              {rows ? ` · ${activeDays} de ${days.length || "—"} días con gasto` : ""}
+            </p>
+          )}
 
           {error && (
             <div className="mx-4 flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">

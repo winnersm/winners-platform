@@ -5,6 +5,10 @@ import {
   DollarSign, ArrowUpRight, ArrowDownRight, Percent, ShoppingCart, Target, ChevronDown, type LucideIcon,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { calcMetrics, fmtMoney, fmtInt, fmtPct, type Insights } from "@/lib/metrics";
 
 // Resumen superior de Campañas: las mismas tarjetas que Rendimiento (gasto, revenue, profit,
@@ -24,6 +28,17 @@ const add = (t: Tot, i: SummaryItem): Tot => {
   return m ? { spend: t.spend + m.spend, revenue: t.revenue + m.revenue, sales: t.sales + m.sales } : t;
 };
 const EMPTY: Tot = { spend: 0, revenue: 0, sales: 0 };
+
+// Monedas secundarias (p. ej. COP junto a USD): sin gasto no se muestran; con gasto se pregunta
+// una vez si se agregan al resumen. La elección se recuerda en este navegador.
+type Choice = "show" | "hide";
+const choiceKey = (c: string) => `metrics-summary:currency:${c}`;
+function readChoice(c: string): Choice | null {
+  try { const v = localStorage.getItem(choiceKey(c)); return v === "show" || v === "hide" ? v : null; } catch { return null; }
+}
+function saveChoice(c: string, v: Choice) {
+  try { localStorage.setItem(choiceKey(c), v); } catch { /* sin almacenamiento */ }
+}
 
 function StatCard({ label, value, tone, icon: Icon, accent, blob }: {
   label: string; value: string; tone?: "pos" | "neg"; icon: LucideIcon; accent: string; blob: string;
@@ -70,6 +85,9 @@ export function MetricsSummary({ items, loading, byAccount = false, scope }: {
   scope: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Elecciones tomadas en esta visita; las anteriores se leen del navegador.
+  const [decided, setDecided] = useState<Record<string, Choice>>({});
+  const choiceOf = (c: string): Choice | null => decided[c] ?? readChoice(c);
 
   const byCurrency = useMemo(() => {
     const m = new Map<string, Tot>();
@@ -88,6 +106,21 @@ export function MetricsSummary({ items, loading, byAccount = false, scope }: {
     return [...m.entries()].map(([id, v]) => ({ id, ...v })).filter(a => a.t.spend > 0 || a.t.revenue > 0).sort((a, b) => b.t.spend - a.t.spend);
   }, [items, byAccount]);
 
+  // Principal: USD si está; si solo hay una moneda, esa. El resto son secundarias.
+  const primary = byCurrency.some(([c]) => c === "USD") ? "USD" : byCurrency.length === 1 ? byCurrency[0][0] : null;
+  const isSecondary = (c: string) => byCurrency.length > 1 && c !== primary;
+  const secondaryWithSpend = byCurrency.filter(([c, t]) => isSecondary(c) && t.spend > 0).map(([c]) => c);
+  // Pregunta por la primera secundaria con gasto aún sin decidir (cuando ya cargó, no con datos a medias).
+  const ask = loading ? null : secondaryWithSpend.find(c => choiceOf(c) == null) ?? null;
+
+  const decide = (c: string, v: Choice) => {
+    saveChoice(c, v);
+    setDecided(prev => ({ ...prev, [c]: v }));
+  };
+
+  const visible = byCurrency.filter(([c, t]) => !isSecondary(c) || (t.spend > 0 && choiceOf(c) === "show"));
+  const collapsed = byCurrency.filter(([c, t]) => isSecondary(c) && t.spend > 0 && choiceOf(c) !== "show");
+
   const hasData = byCurrency.some(([, t]) => t.spend > 0 || t.revenue > 0 || t.sales > 0);
 
   if (loading && !hasData) {
@@ -101,7 +134,44 @@ export function MetricsSummary({ items, loading, byAccount = false, scope }: {
 
   return (
     <div className="space-y-3 pb-3" aria-label={`Resumen de ${scope}`}>
-      {byCurrency.map(([currency, t]) => <Cards key={currency} t={t} currency={currency} many={byCurrency.length > 1} />)}
+      {visible.map(([currency, t]) => (
+        <div key={currency} className="space-y-1">
+          <Cards t={t} currency={currency} many={byCurrency.length > 1} />
+          {isSecondary(currency) && (
+            <button type="button" onClick={() => decide(currency, "hide")}
+              className="ml-0.5 text-[11px] text-muted-foreground underline-offset-2 hover:underline">
+              Quitar {currency} del resumen
+            </button>
+          )}
+        </div>
+      ))}
+
+      {collapsed.map(([currency, t]) => (
+        <div key={currency} className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-xs max-md:min-h-11">
+          <span className="font-medium">{currency}</span>
+          <span className="text-muted-foreground">· gasto {fmtMoney(t.spend)} · revenue {fmtMoney(t.revenue)}</span>
+          <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" onClick={() => decide(currency, "show")}>
+            <ChevronDown className="h-3.5 w-3.5" /> Mostrar {currency}
+          </Button>
+        </div>
+      ))}
+
+      <Dialog open={ask != null} onOpenChange={o => { if (!o && ask) decide(ask, "hide"); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Hay gasto en {ask}</DialogTitle>
+            <DialogDescription>
+              Las cuentas en {ask} tienen gasto en este periodo
+              {ask && byCurrency.find(([c]) => c === ask) ? ` (${fmtMoney(byCurrency.find(([c]) => c === ask)![1].spend)} ${ask})` : ""}.
+              ¿Deseas agregarlo al dashboard? Si no, quedará plegado y podrás desplegarlo cuando quieras.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => ask && decide(ask, "hide")}>Dejar plegado</Button>
+            <Button onClick={() => ask && decide(ask, "show")}>Agregar {ask}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {byAccount && accounts.length > 0 && (
         <div className="rounded-lg border bg-card">
