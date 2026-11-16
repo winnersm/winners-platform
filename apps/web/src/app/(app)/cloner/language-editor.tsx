@@ -417,7 +417,7 @@ export function LanguageEditor({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-56 space-y-1.5">
+        <div className="min-w-56 space-y-1.5 max-md:min-w-full">
           <Label>Idioma</Label>
           <Select
             value={String(indiceIdioma)}

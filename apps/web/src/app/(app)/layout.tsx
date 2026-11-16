@@ -41,7 +41,7 @@ export default async function AppLayout({
           <OperationSwitcher />
           <ThemeToggle />
         </header>
-        <main className="min-w-0 flex-1 p-5 pb-16">{children}</main>
+        <main className="min-w-0 flex-1 p-3 pb-16 md:p-5 md:pb-16">{children}</main>
       </SidebarInset>
       {canScope(user, "META", "jobs") && <JobsDock />}
     </SidebarProvider>

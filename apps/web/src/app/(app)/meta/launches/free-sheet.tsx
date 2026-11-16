@@ -138,9 +138,9 @@ export function FreeSheetGrid({
       <div className="flex items-center gap-2 flex-wrap">
         <Button size="sm" onClick={addRow}><Plus className="h-4 w-4 mr-1" /> Nueva fila</Button>
         <Button size="sm" variant="outline" onClick={addColumn}><Columns3 className="h-4 w-4 mr-1" /> Nueva columna</Button>
-        <div className="relative">
+        <div className="relative max-md:w-full">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Buscar…" className="pl-8 h-9 w-56 bg-white" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <Input placeholder="Buscar…" className="pl-8 h-9 w-56 bg-white max-md:w-full max-md:h-10 max-md:text-base" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
         {saveState === "saving" && <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Guardando…</span>}
         {saveState === "saved" && <span className="inline-flex items-center gap-1 text-[11px] text-green-600"><CloudCheck className="h-3 w-3" /> Guardado</span>}

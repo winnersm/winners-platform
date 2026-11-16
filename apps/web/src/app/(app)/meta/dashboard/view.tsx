@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, X, DollarSign, ArrowUpRight, ArrowDownRight, Percent, ShoppingCart, Target, Search, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, ChevronDown, X, DollarSign, ArrowUpRight, ArrowDownRight, Percent, ShoppingCart, Target, Search, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,7 +12,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { calcMetrics, fmtMoney, fmtInt, fmtPct, type Insights } from "@/lib/metrics";
+import { calcMetrics, fmtMoney, fmtInt, fmtPct, type Insights, type Metrics } from "@/lib/metrics";
 
 const DAYS_ES = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
 const MONTHS_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
@@ -81,7 +81,7 @@ function RangeCalendar({ onSelect, onClose, initialFrom, initialTo }: {
   if (hlFrom && hlTo && hlFrom > hlTo) [hlFrom, hlTo] = [hlTo, hlFrom];
 
   return (
-    <div ref={ref} className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg border shadow-lg p-3 w-[280px] select-none">
+    <div ref={ref} className="absolute right-0 top-full mt-1 z-50 bg-popover text-popover-foreground rounded-lg border shadow-lg p-3 w-[280px] max-w-[calc(100vw-1.5rem)] select-none">
       <div className="flex items-center justify-between mb-2">
         <button className="p-1 rounded hover:bg-muted transition-colors" onClick={prevMonth}><ChevronLeft className="h-4 w-4" /></button>
         <span className="text-xs font-semibold">{MONTHS_ES[viewMonth]} {viewYear}</span>
@@ -161,6 +161,86 @@ const ACCOUNT_STATUS: Record<number, { label: string; tone: "red" | "amber" }> =
   100: { label: "Cierre pendiente", tone: "red" },
   101: { label: "Cerrado", tone: "red" },
 };
+
+// ─── Vista móvil ──────────────────────────────────────────────────────────────
+// Por debajo de `md` la tabla se sustituye por tarjetas, igual que en Campañas.
+
+const SORT_OPTS = [
+  { value: "spend", label: "Gasto" }, { value: "revenue", label: "Revenue" }, { value: "profit", label: "Profit" },
+  { value: "roi", label: "ROI" }, { value: "sales", label: "Ventas" }, { value: "cpa", label: "CPA" },
+  { value: "cpm", label: "CPM" }, { value: "ctr", label: "CTR" }, { value: "name", label: "Nombre" },
+];
+
+/** Importe abreviado: en una tarjeta no cabe una cifra completa en cuatro columnas. */
+function fmtShort(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  return abs < 10_000 ? `${sign}${fmtMoney(abs)}` : `${sign}$${Math.round(abs).toLocaleString("es-MX")}`;
+}
+
+function MobileMetric({ label, value, tone }: { label: string; value: string; tone?: number }) {
+  const color = tone === undefined || tone === 0 ? "" : tone > 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400";
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] leading-4 text-muted-foreground">{label}</p>
+      <p className={`truncate text-[13px] leading-5 font-semibold tabular-nums ${color}`}>{value}</p>
+    </div>
+  );
+}
+
+/** Tarjeta de una cuenta publicitaria. Tocarla abre sus campañas, como la fila en desktop. */
+function AccountCard({ name, currency, m, status, removedAt, onOpen }: {
+  name: string; currency: string; m: Metrics | null;
+  status: { label: string; tone: "red" | "amber" } | null;
+  /** Solo en archivadas: cuándo salió del BM. */
+  removedAt?: string | null;
+  onOpen?: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const profit = m?.profit ?? 0;
+  const stripe = profit > 0 ? "border-l-green-400" : profit < 0 ? "border-l-red-400" : "border-l-transparent";
+  return (
+    <article className={`rounded-lg border border-l-4 bg-card ${stripe} ${onOpen ? "cursor-pointer active:bg-muted" : ""}`} onClick={onOpen}>
+      <div className="flex items-start gap-2 px-3 pt-2.5">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium leading-snug break-words line-clamp-2">{name}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {currency}
+            {removedAt !== undefined && <> · salió del BM {removedAt ? new Date(removedAt).toLocaleDateString("es") : "—"}</>}
+          </p>
+        </div>
+        {status && (
+          <span className={`mt-0.5 shrink-0 rounded px-1.5 py-[1px] text-[10px] font-semibold ${status.tone === "red" ? "bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-400" : "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400"}`}>
+            {status.label}
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-4 gap-x-2 gap-y-2 px-3 pt-2 pb-1">
+        <MobileMetric label="Gasto" value={fmtShort(m?.spend ?? 0)} />
+        <MobileMetric label="Revenue" value={fmtShort(m?.revenue ?? 0)} />
+        <MobileMetric label="Profit" value={fmtShort(profit)} tone={profit} />
+        <MobileMetric label="ROI" value={`${(m?.roi ?? 0).toFixed(0)}%`} tone={m?.roi ?? 0} />
+        {expanded && <>
+          <MobileMetric label="Ventas" value={fmtInt(m?.sales ?? 0)} />
+          <MobileMetric label="CPA" value={fmtShort(m?.cpa ?? 0)} />
+          <MobileMetric label="CPM" value={fmtShort(m?.cpm ?? 0)} />
+          <MobileMetric label="CTR" value={fmtPct(m?.ctr ?? 0)} />
+        </>}
+      </div>
+      <div className="flex items-center pl-1 pr-1" onClick={(e) => e.stopPropagation()}>
+        <Button variant="ghost" size="sm" className="h-10 text-xs text-muted-foreground" aria-expanded={expanded} onClick={() => setExpanded((x) => !x)}>
+          {expanded ? "Menos" : "Más métricas"}
+          <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </Button>
+        {onOpen && (
+          <Button variant="ghost" size="sm" className="ml-auto h-10 pr-1 text-xs text-primary" onClick={onOpen}>
+            Campañas<ChevronRight className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+    </article>
+  );
+}
 
 export default function DashboardView() {
 
@@ -332,7 +412,7 @@ export default function DashboardView() {
   );
 
   const Card = ({ label, value, tone, icon: Icon, accent, blob }: { label: string; value: string; tone?: "pos" | "neg"; icon: LucideIcon; accent: string; blob: string }) => (
-    <div className="relative rounded-xl border border-white/20 dark:border-white/10 p-4 overflow-hidden backdrop-blur-md bg-white/60 dark:bg-white/[0.06] shadow-sm">
+    <div className="relative rounded-xl border border-white/20 dark:border-white/10 p-4 overflow-hidden backdrop-blur-md bg-white/60 dark:bg-white/[0.06] shadow-sm max-md:p-3">
       <div className={`absolute -top-4 -right-4 h-20 w-20 rounded-full ${blob} opacity-30 blur-2xl`} style={{ animation: "blob-drift 8s ease-in-out infinite" }} />
       <div className={`absolute -bottom-6 -left-6 h-16 w-16 rounded-full ${blob} opacity-20 blur-2xl`} style={{ animation: "blob-drift-2 10s ease-in-out infinite" }} />
       <div className="relative z-10">
@@ -342,15 +422,15 @@ export default function DashboardView() {
             <Icon className="h-3.5 w-3.5 text-white" />
           </div>
         </div>
-        <div className={`text-xl font-bold ${tone === "pos" ? "text-green-600 dark:text-green-400" : tone === "neg" ? "text-red-600 dark:text-red-400" : ""}`}>{value}</div>
+        <div className={`truncate text-xl font-bold tabular-nums max-md:text-lg ${tone === "pos" ? "text-green-600 dark:text-green-400" : tone === "neg" ? "text-red-600 dark:text-red-400" : ""}`}>{value}</div>
       </div>
     </div>
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 max-md:space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           <LayoutDashboard className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">Rendimiento</h1>
           <span className="text-sm text-muted-foreground">{loading ? `Cargando ${done}/${total} cuentas…` : `${total} ${showArchived ? "cuentas archivadas" : "cuentas"}`}</span>
@@ -360,28 +440,29 @@ export default function DashboardView() {
               : syncedAt && <span className="text-[11px] text-muted-foreground/70" title={`Última lectura directa de Meta${oldestSyncedAt && agoLabel(oldestSyncedAt) !== agoLabel(syncedAt) ? ` · la cuenta más atrasada: ${agoLabel(oldestSyncedAt)}` : ""}`}>· actualizado {agoLabel(syncedAt)}</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center rounded-md border p-0.5">
-            <Button variant={showArchived ? "ghost" : "secondary"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowArchived(false)}>Activas</Button>
-            <Button variant={showArchived ? "secondary" : "ghost"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowArchived(true)}>Archivadas</Button>
+        {/* En móvil: periodo a todo el ancho arriba; debajo, Activas/Archivadas y Sincronizar. */}
+        <div className="flex flex-wrap items-center gap-2 max-md:w-full">
+          <div className="flex items-center rounded-md border p-0.5 max-md:flex-1">
+            <Button variant={showArchived ? "ghost" : "secondary"} size="sm" className="h-7 px-2.5 text-xs max-md:h-9 max-md:flex-1" onClick={() => setShowArchived(false)}>Activas</Button>
+            <Button variant={showArchived ? "secondary" : "ghost"} size="sm" className="h-7 px-2.5 text-xs max-md:h-9 max-md:flex-1" onClick={() => setShowArchived(true)}>Archivadas</Button>
           </div>
-          <TrendingUp className={`h-3.5 w-3.5 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
-          <div className="flex items-center gap-1">
+          <TrendingUp className={`h-3.5 w-3.5 max-md:hidden ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
+          <div className="flex items-center gap-1 max-md:order-first max-md:w-full">
             {datePreset.startsWith("custom:") ? (
-              <div className="flex items-center h-8 rounded-md border bg-white overflow-hidden text-xs">
-                <span className="px-2.5 text-muted-foreground">{customFrom} — {customTo}</span>
-                <button className="px-2 h-full border-l text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" onClick={() => setDatePreset("today")} title="Volver a presets">
-                  <X className="h-3 w-3" />
+              <div className="flex items-center h-8 rounded-md border bg-card overflow-hidden text-xs max-md:h-10 max-md:flex-1">
+                <span className="px-2.5 text-muted-foreground max-md:flex-1">{customFrom} — {customTo}</span>
+                <button className="px-2 h-full border-l text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors max-md:px-3" onClick={() => setDatePreset("today")} title="Volver a presets" aria-label="Volver a presets">
+                  <X className="h-3 w-3 max-md:h-4 max-md:w-4" />
                 </button>
               </div>
             ) : (
               <Select value={datePreset} onValueChange={(v: string | null) => v && setDatePreset(v)}>
-                <SelectTrigger className="h-8 w-28 text-xs bg-white"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-8 w-28 text-xs bg-card max-md:flex-1 max-md:data-[size=default]:h-10" aria-label="Periodo"><SelectValue /></SelectTrigger>
                 <SelectContent>{DATE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value} className="text-xs">{p.label}</SelectItem>)}</SelectContent>
               </Select>
             )}
             <div className="relative">
-              <button className={`h-8 w-8 rounded-md border bg-white flex items-center justify-center transition-colors ${showCalendar ? "text-primary border-primary" : "text-muted-foreground hover:text-foreground hover:border-foreground/30"}`} onClick={() => setShowCalendar(!showCalendar)} title="Seleccionar rango de fechas">
+              <button className={`h-8 w-8 rounded-md border bg-card flex items-center justify-center transition-colors max-md:h-10 max-md:w-10 ${showCalendar ? "text-primary border-primary" : "text-muted-foreground hover:text-foreground hover:border-foreground/30"}`} onClick={() => setShowCalendar(!showCalendar)} title="Seleccionar rango de fechas" aria-label="Seleccionar rango de fechas">
                 <CalendarDays className="h-3.5 w-3.5" />
               </button>
               {showCalendar && (
@@ -400,9 +481,9 @@ export default function DashboardView() {
               )}
             </div>
           </div>
-          <Button size="sm" className="h-8 px-2.5 text-xs" onClick={syncWithMeta} disabled={syncing || loading} title="Trae datos frescos desde Meta y actualiza los snapshots">
+          <Button size="sm" className="h-8 px-2.5 text-xs max-md:h-10" onClick={syncWithMeta} disabled={syncing || loading} title="Trae datos frescos desde Meta y actualiza los snapshots">
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
-            {syncing ? "Sincronizando…" : "Sincronizar con Meta"}
+            {syncing ? "Sincronizando…" : <>Sincronizar<span className="max-md:hidden"> con Meta</span></>}
           </Button>
         </div>
       </div>
@@ -418,7 +499,7 @@ export default function DashboardView() {
                 {totsByC.size > 1 && (
                   <div className="text-xs font-medium text-muted-foreground ml-0.5">{currency}</div>
                 )}
-                <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+                <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6 max-md:gap-2">
                   <Card label={`Gasto ${currency}`} value={fmtMoney(t.spend)} icon={DollarSign} accent="bg-blue-500" blob="bg-blue-400" />
                   <Card label={`Revenue ${currency}`} value={fmtMoney(t.revenue)} icon={ArrowUpRight} accent="bg-emerald-500" blob="bg-emerald-400" />
                   <Card label={`Profit ${currency}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} icon={profit >= 0 ? ArrowUpRight : ArrowDownRight} accent={profit >= 0 ? "bg-green-500" : "bg-red-500"} blob={profit >= 0 ? "bg-green-400" : "bg-red-400"} />
@@ -438,27 +519,59 @@ export default function DashboardView() {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 rounded-md border px-3 py-2">
-          <Search className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-          <input aria-label="Buscar cuenta por nombre o ID" placeholder="Buscar cuenta por nombre o ID…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-64 bg-transparent text-xs outline-none" />
+      <div className="flex flex-wrap items-center gap-3 max-md:gap-2">
+        <label className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 max-md:h-10 max-md:w-full">
+          <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <input aria-label="Buscar cuenta por nombre o ID" placeholder="Buscar cuenta por nombre o ID…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-64 bg-transparent text-xs outline-none max-md:w-full max-md:min-w-0 max-md:text-base" />
         </label>
         <Select value={currencyFilter} onValueChange={(value) => value && setCurrencyFilter(value)}>
-          <SelectTrigger className="w-40 text-xs" aria-label="Filtrar por moneda"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-40 text-xs bg-card max-md:flex-1 max-md:data-[size=default]:h-10" aria-label="Filtrar por moneda"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">Todas las monedas</SelectItem>
             {currencies.map((currency) => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}
           </SelectContent>
         </Select>
-        <label className="flex items-center gap-2 text-xs">
-          <input type="checkbox" checked={hideZero} onChange={(e) => setHideZero(e.target.checked)} />
+        <label className="flex items-center gap-2 text-xs max-md:h-10 max-md:px-1">
+          <input type="checkbox" className="max-md:h-4 max-md:w-4" checked={hideZero} onChange={(e) => setHideZero(e.target.checked)} />
           Ocultar sin gasto
         </label>
-        <span className="text-xs text-muted-foreground">{rows.length} de {accounts.length} cuentas · los totales incluyen todas las cuentas</span>
+        {/* En móvil no hay cabeceras de columna que tocar para ordenar. */}
+        <Select value={sort.key} onValueChange={(v) => v && setSort({ key: v, dir: v === "name" ? "asc" : "desc" })}>
+          <SelectTrigger className="flex-1 bg-card text-xs md:hidden data-[size=default]:h-10" aria-label="Ordenar por">
+            <SelectValue>{`Ordenar: ${SORT_OPTS.find((o) => o.value === sort.key)?.label ?? sort.key}`}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>{SORT_OPTS.map((o) => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}</SelectContent>
+        </Select>
+        <Button variant="outline" size="sm" className="h-10 w-10 bg-card p-0 md:hidden" aria-label={sort.dir === "asc" ? "Orden ascendente" : "Orden descendente"}
+          onClick={() => setSort((s) => ({ ...s, dir: s.dir === "asc" ? "desc" : "asc" }))}>
+          {sort.dir === "asc" ? "▲" : "▼"}
+        </Button>
+        <span className="text-xs text-muted-foreground max-md:w-full">{rows.length} de {accounts.length} cuentas · los totales incluyen todas las cuentas</span>
       </div>
 
-      {/* Por cuenta */}
-      <div className="rounded-lg border overflow-x-auto">
+      {/* Móvil: tarjetas (la tabla no cabe y desplazarla con el pulgar pierde de vista la cuenta) */}
+      <div className="space-y-2 md:hidden">
+        {loading && rows.every((r) => !r.m) ? (
+          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[104px] w-full rounded-lg" />)
+        ) : rows.length === 0 ? (
+          <p className="py-10 text-center text-sm text-muted-foreground">No hay cuentas que coincidan con los filtros.</p>
+        ) : rows.map(({ acc, m }) => {
+          const rawId = acc.id.replace("act_", "");
+          const st = acc.account_status === 1
+            ? null
+            : ACCOUNT_STATUS[acc.account_status] ?? { label: `Estado ${acc.account_status}`, tone: "amber" as const };
+          return (
+            <AccountCard
+              key={acc.id} name={acc.name} currency={acc.currency} m={m} status={st}
+              removedAt={showArchived ? acc.removedFromBmAt ?? null : undefined}
+              onOpen={showArchived ? undefined : () => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}
+            />
+          );
+        })}
+      </div>
+
+      {/* Desktop: tabla por cuenta */}
+      <div className="rounded-lg border overflow-x-auto max-md:hidden">
         <Table>
           <TableHeader>
             <TableRow className="border-b">

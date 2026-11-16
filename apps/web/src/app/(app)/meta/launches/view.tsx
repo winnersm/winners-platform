@@ -517,9 +517,9 @@ export default function LaunchesView() {
         <Button size="sm" onClick={addRow}>
           <Plus className="h-4 w-4 mr-1" /> Nueva Celda
         </Button>
-        <div className="relative">
+        <div className="relative max-md:w-full">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Buscar…" className="pl-8 h-9 w-56 bg-white" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <Input placeholder="Buscar…" className="pl-8 h-9 w-56 bg-white max-md:w-full max-md:h-10 max-md:text-base" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
       </div>
 

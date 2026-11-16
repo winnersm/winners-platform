@@ -87,7 +87,7 @@ export function TokensView({ puedeEscribir }: { puedeEscribir: boolean }) {
           </p>
 
           <div className="mt-4 flex flex-wrap items-end gap-3">
-            <div className="w-56 space-y-1.5">
+            <div className="w-56 space-y-1.5 max-md:w-full">
               <Label htmlFor="alias">Alias</Label>
               <Input
                 id="alias"
@@ -96,7 +96,7 @@ export function TokensView({ puedeEscribir }: { puedeEscribir: boolean }) {
                 placeholder="BM Operaciones"
               />
             </div>
-            <div className="min-w-64 flex-1 space-y-1.5">
+            <div className="min-w-64 flex-1 space-y-1.5 max-md:min-w-full">
               <Label htmlFor="token">Token</Label>
               <Input
                 id="token"

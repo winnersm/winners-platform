@@ -117,16 +117,16 @@ export default function AccountsView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">Cuentas publicitarias</h1>
+          <h1 className="text-2xl font-bold max-md:text-lg">Cuentas publicitarias</h1>
           <p className="text-muted-foreground text-sm mt-1">
             {accounts.length > 0
               ? (filtered.length === accounts.length ? `${accounts.length} cuentas` : `${filtered.length} de ${accounts.length} cuentas`)
               : "Cargando..."}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={() => loadUsage(true)} disabled={loading || loadingQuota}>
             <Activity className={`h-4 w-4 mr-1 ${loadingQuota ? "animate-pulse" : ""}`} />
             {loadingQuota ? "Midiendo..." : "Refrescar cuotas"}
@@ -140,11 +140,11 @@ export default function AccountsView() {
 
       {/* Filtro */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative">
+        <div className="relative max-md:w-full">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Buscar cuenta por nombre o ID..."
-            className="pl-8 h-9 w-72 bg-white"
+            className="pl-8 h-9 w-72 bg-white max-md:w-full max-md:h-10 max-md:text-base"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />

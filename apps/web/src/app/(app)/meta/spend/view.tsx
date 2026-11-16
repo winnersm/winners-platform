@@ -131,9 +131,9 @@ export default function SpendView() {
   const totByC = data?.totals ?? [];
 
   const Card = ({ label, value, tone }: { label: string; value: string; tone?: "pos" | "neg" }) => (
-    <div className="rounded-xl border bg-white p-4">
+    <div className="min-w-0 rounded-xl border bg-white p-4 max-md:p-3">
       <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
-      <div className={`text-xl font-bold mt-1 ${tone === "pos" ? "text-green-600" : tone === "neg" ? "text-red-600" : ""}`}>{value}</div>
+      <div className={`truncate text-xl font-bold mt-1 tabular-nums max-md:text-lg ${tone === "pos" ? "text-green-600" : tone === "neg" ? "text-red-600" : ""}`}>{value}</div>
     </div>
   );
 
@@ -148,33 +148,33 @@ export default function SpendView() {
         {!loading && data?.lastSync && (
           <span className="text-[11px] text-muted-foreground/70">· actualizado {agoLabel(data.lastSync)}</span>
         )}
-        <TrendingUp className={`h-3.5 w-3.5 ml-1 ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
-        <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={doBackfill} disabled={backfilling || syncing} title="Trae el histórico de los últimos 12 meses desde Meta (lento)">
+        <TrendingUp className={`h-3.5 w-3.5 ml-1 max-md:hidden ${loading ? "animate-pulse text-primary" : "text-muted-foreground/40"}`} />
+        <div className="ml-auto flex items-center gap-2 max-md:ml-0 max-md:w-full">
+          <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs max-md:h-10 max-md:flex-1" onClick={doBackfill} disabled={backfilling || syncing} title="Trae el histórico de los últimos 12 meses desde Meta (lento)">
             <History className={`h-3.5 w-3.5 mr-1.5 ${backfilling ? "animate-spin" : ""}`} />
             {backfilling ? "Trayendo histórico…" : "Traer histórico"}
           </Button>
-          <Button size="sm" className="h-8 px-2.5 text-xs" onClick={doSync} disabled={syncing || backfilling} title="Actualiza los últimos días desde Meta">
+          <Button size="sm" className="h-8 px-2.5 text-xs max-md:h-10 max-md:flex-1" onClick={doSync} disabled={syncing || backfilling} title="Actualiza los últimos días desde Meta">
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
-            {syncing ? "Sincronizando…" : "Sincronizar con Meta"}
+            {syncing ? "Sincronizando…" : <>Sincronizar<span className="max-md:hidden"> con Meta</span></>}
           </Button>
         </div>
       </div>
 
       {/* Calendario + rangos rápidos */}
       <div className="flex items-end gap-3 flex-wrap">
-        <div className="space-y-1">
+        <div className="space-y-1 max-md:flex-1">
           <label className="text-[11px] text-muted-foreground">Desde</label>
-          <Input type="date" value={from} max={to} onChange={(e) => e.target.value && setFrom(e.target.value)} className="h-9 w-40 bg-white" />
+          <Input type="date" value={from} max={to} onChange={(e) => e.target.value && setFrom(e.target.value)} className="h-9 w-40 bg-white max-md:h-10 max-md:w-full" />
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1 max-md:flex-1">
           <label className="text-[11px] text-muted-foreground">Hasta</label>
-          <Input type="date" value={to} min={from} max={ymd(new Date())} onChange={(e) => e.target.value && setTo(e.target.value)} className="h-9 w-40 bg-white" />
+          <Input type="date" value={to} min={from} max={ymd(new Date())} onChange={(e) => e.target.value && setTo(e.target.value)} className="h-9 w-40 bg-white max-md:h-10 max-md:w-full" />
         </div>
         <Button variant="ghost" size="sm" className="h-9 px-2" onClick={() => load(from, to)} disabled={loading} title="Recargar">
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
         </Button>
-        <div className="flex items-center gap-1 flex-wrap ml-auto">
+        <div className="flex items-center gap-1 flex-wrap ml-auto max-md:ml-0 max-md:w-full">
           {ranges.map((r) => (
             <Button
               key={r.label}
@@ -205,7 +205,7 @@ export default function SpendView() {
                 {totByC.length > 1 && (
                   <div className="text-xs font-medium text-muted-foreground ml-0.5">{tot.currency ?? "SIN MONEDA"}</div>
                 )}
-                <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+                <div className="grid gap-3 grid-cols-2 md:grid-cols-4 max-md:gap-2">
                   <Card label={`Gasto${curr}`} value={fmtMoney(tot.spend)} />
                   <Card label={`Revenue${curr}`} value={fmtMoney(tot.revenue)} />
                   <Card label={`Profit${curr}`} value={fmtMoney(profit)} tone={profit > 0 ? "pos" : profit < 0 ? "neg" : undefined} />
@@ -239,7 +239,7 @@ export default function SpendView() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="min-w-[200px]">CUENTA</TableHead>
+              <TableHead className="min-w-[200px] max-md:sticky max-md:left-0 max-md:z-10 max-md:min-w-[150px] max-md:bg-card">CUENTA</TableHead>
               <TableHead className="text-right">GASTO</TableHead>
               <TableHead className="text-right">REVENUE</TableHead>
               <TableHead className="text-right">PROFIT</TableHead>
@@ -259,7 +259,7 @@ export default function SpendView() {
               const currLabel = r.currency ? ` (${r.currency})` : "";
               return (
                 <TableRow key={r.accountId}>
-                  <TableCell className="py-2"><span className="text-xs font-medium line-clamp-1">{r.name}{currLabel}</span></TableCell>
+                  <TableCell className="py-2 max-md:sticky max-md:left-0 max-md:z-10 max-md:bg-card"><span className="text-xs font-medium line-clamp-2">{r.name}{currLabel}</span></TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(r.spend)}</TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(r.revenue)}</TableCell>
                   <TableCell className={`py-2 text-right text-xs tabular-nums font-medium ${profit > 0 ? "text-green-600" : profit < 0 ? "text-red-600" : ""}`}>{fmtMoney(profit)}</TableCell>

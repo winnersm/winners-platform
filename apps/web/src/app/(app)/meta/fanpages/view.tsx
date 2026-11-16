@@ -398,7 +398,7 @@ export default function FanpagesView() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Contact className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">Fanpages</h1>
           <span className="text-sm text-muted-foreground">
@@ -407,7 +407,7 @@ export default function FanpagesView() {
           {tokenName && <Badge variant="secondary" className="text-[11px] gap-1"><ShieldCheck className="h-3 w-3" />{tokenName}</Badge>}
           {lastSync && <span className="text-[11px] text-muted-foreground/60">· sync {new Date(lastSync).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <ChangeTokenDialog currentName={tokenName} onSaved={() => { loadToken(); loadPages(); }} />
           <Button variant="outline" size="sm" onClick={() => verifyPbia(visible.map((p) => p.id))} disabled={verifying || loading || pages.length === 0}>
             {verifying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
@@ -428,9 +428,9 @@ export default function FanpagesView() {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative">
+        <div className="relative max-md:w-full">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Buscar por nombre o ID…" className="pl-8 h-9 w-72 bg-white" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <Input placeholder="Buscar por nombre o ID…" className="pl-8 h-9 w-72 bg-white max-md:w-full max-md:h-10 max-md:text-base" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
         <Button variant="outline" size="sm" onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}>
           {sortDir === "asc" ? <ArrowDownAZ className="h-4 w-4 mr-1" /> : <ArrowUpZA className="h-4 w-4 mr-1" />}
@@ -438,7 +438,7 @@ export default function FanpagesView() {
         </Button>
 
         <Select value={bmFilter} onValueChange={(v) => v && setBmFilter(v)}>
-          <SelectTrigger className="h-9 w-48 text-xs bg-white">
+          <SelectTrigger className="h-9 w-48 text-xs bg-white max-md:flex-1">
             <SelectValue>{bmFilter === "all" ? "BM: todos" : (bmOptions.find(([id]) => id === bmFilter)?.[1] ?? "BM")}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -448,7 +448,7 @@ export default function FanpagesView() {
         </Select>
 
         <Select value={catFilter} onValueChange={(v) => v && setCatFilter(v)}>
-          <SelectTrigger className="h-9 w-44 text-xs bg-white">
+          <SelectTrigger className="h-9 w-44 text-xs bg-white max-md:flex-1">
             <SelectValue>{catFilter === "all" ? "Categoría: todas" : catFilter}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -458,7 +458,7 @@ export default function FanpagesView() {
         </Select>
 
         <Select value={pbiaFilter} onValueChange={(v) => v && setPbiaFilter(v)}>
-          <SelectTrigger className="h-9 w-36 text-xs bg-white">
+          <SelectTrigger className="h-9 w-36 text-xs bg-white max-md:flex-1">
             <SelectValue>{{ all: "PBIA: todas", yes: "Con PBIA", no: "Sin PBIA", unchecked: "Sin verificar" }[pbiaFilter]}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -470,7 +470,7 @@ export default function FanpagesView() {
         </Select>
 
         <Select value={healthFilter} onValueChange={(v) => v && setHealthFilter(v)}>
-          <SelectTrigger className="h-9 w-36 text-xs bg-white">
+          <SelectTrigger className="h-9 w-36 text-xs bg-white max-md:flex-1">
             <SelectValue>{{ all: "Estado: todas", published: "Publicadas", unpublished: "Despublicadas" }[healthFilter]}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -481,7 +481,7 @@ export default function FanpagesView() {
         </Select>
 
         <Select value={adsFilter} onValueChange={(v) => v && setAdsFilter(v)}>
-          <SelectTrigger className="h-9 w-36 text-xs bg-white">
+          <SelectTrigger className="h-9 w-36 text-xs bg-white max-md:flex-1">
             <SelectValue>{{ all: "Ads: todas", with: "Con ads activos", without: "Sin ads" }[adsFilter]}</SelectValue>
           </SelectTrigger>
           <SelectContent>

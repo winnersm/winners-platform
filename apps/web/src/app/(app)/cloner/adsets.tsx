@@ -476,7 +476,7 @@ function AdsetNuevo({
   return (
     <div className="space-y-4 rounded-lg border border-dashed bg-card p-4">
       <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-48 space-y-1.5">
+        <div className="min-w-48 space-y-1.5 max-md:min-w-full">
           <Label>Copiar de</Label>
           <Select
             value={extra.base}
@@ -495,7 +495,7 @@ function AdsetNuevo({
           </Select>
         </div>
 
-        <div className="min-w-56 flex-1 space-y-1.5">
+        <div className="min-w-56 flex-1 space-y-1.5 max-md:min-w-full">
           <Label>Nombre del adset nuevo</Label>
           <Input
             value={extra.nombre}
