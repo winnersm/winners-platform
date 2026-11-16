@@ -10,9 +10,15 @@ import styles from "./split-loader.module.css";
  *
  * La pantalla se corta por una línea que hace de espejo (una W girada 180° es
  * una M). Mientras carga la sección, W y M giran juntas como una sola pieza
- * alrededor del centro, con estela. Cuando la ruta nueva ya está renderizada,
- * se completa el giro en curso, el par queda quieto en el medio y cada mitad
- * de la pantalla se lleva su letra, dejando ver la sección pedida.
+ * alrededor del centro, con estela. Cuando la página está completamente
+ * cargada, se completa el giro en curso, el par queda quieto en el medio y
+ * cada mitad de la pantalla se lleva su letra, dejando ver la sección pedida.
+ *
+ * "Completamente cargada" = la ruta cambió, no hay peticiones fetch en curso,
+ * hubo QUIET_MS de calma y en <main> no quedan esqueletos, spinners visibles
+ * ni imágenes a medio cargar. La animación ajusta su ritmo a lo que tardó:
+ * si la página llega rápido, acelera y se salta los giros; si tarda, sigue
+ * girando hasta que esté lista (con un tope de MAX_WAIT).
  *
  * Prototipo y parámetros: experimentos/splash-wm/index.html.
  */
@@ -23,47 +29,132 @@ const SplitLoaderContext = createContext<SplitLoaderContextValue>({ start: () =>
 
 export const useSplitLoader = () => useContext(SplitLoaderContext);
 
-/** Si la ruta no cambia en este tiempo (s), la animación termina igual. */
+/** Tope (s reales): si la página no termina de cargar, la animación termina igual. */
 const MAX_WAIT = 12;
+/** Calma (ms) sin peticiones antes de dar la página por cargada. */
+const QUIET_MS = 300;
+/** Una petición que lleva más de esto (ms) no se espera (sincronizaciones largas, etc.). */
+const STALE_REQUEST_MS = 8000;
+/** Indicadores de carga que usan las vistas dentro de <main>. */
+const BUSY_SELECTOR = ".animate-pulse, .animate-spin, [aria-busy='true']";
+
+interface LoadTracker {
+  startedAt: number;
+  from: string;
+  target: string;
+  /** Momento en que cambió la ruta (la página nueva ya está montada). */
+  routeAt: number | null;
+  /** Peticiones en curso: id → inicio. */
+  pending: Map<number, number>;
+  total: number;
+  done: number;
+  lastActivity: number;
+}
 
 export function SplitLoaderProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [run, setRun] = useState<{ id: number; target: string; from: string } | null>(null);
-  const loadedRef = useRef(false);
+  const [runId, setRunId] = useState<number | null>(null);
+  const trackerRef = useRef<LoadTracker | null>(null);
+
+  // Cuenta las peticiones fetch hechas mientras la pantalla de carga está activa.
+  useEffect(() => {
+    const original = window.fetch;
+    let seq = 0;
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const tr = trackerRef.current;
+      if (!tr) return original.call(window, input, init);
+      const id = ++seq;
+      tr.pending.set(id, performance.now());
+      tr.total++;
+      tr.lastActivity = performance.now();
+      const end = () => {
+        tr.pending.delete(id);
+        tr.done++;
+        tr.lastActivity = performance.now();
+      };
+      return original.call(window, input, init).then(
+        (res) => { end(); return res; },
+        (err) => { end(); throw err; },
+      );
+    }) as typeof fetch;
+    return () => { window.fetch = original; };
+  }, []);
 
   const start = useCallback(
     (href: string) => {
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-      loadedRef.current = false;
-      setRun((r) => ({ id: (r?.id ?? 0) + 1, target: href, from: pathname }));
+      const now = performance.now();
+      trackerRef.current = {
+        startedAt: now, from: pathname, target: href, routeAt: null,
+        pending: new Map(), total: 0, done: 0, lastActivity: now,
+      };
+      setRunId((id) => (id ?? 0) + 1);
     },
     [pathname],
   );
 
-  // La sección nueva ya está renderizada cuando cambia la ruta.
+  // La página nueva ya está montada cuando cambia la ruta.
   useEffect(() => {
-    if (run && (pathname === run.target || pathname !== run.from)) loadedRef.current = true;
-  }, [pathname, run]);
+    const tr = trackerRef.current;
+    if (tr && tr.routeAt === null && (pathname === tr.target || pathname !== tr.from)) {
+      tr.routeAt = performance.now();
+      tr.lastActivity = tr.routeAt;
+    }
+  }, [pathname, runId]);
 
-  const done = useCallback(() => setRun(null), []);
+  const isLoaded = useCallback(() => {
+    const tr = trackerRef.current;
+    if (!tr || tr.routeAt === null) return false;
+    const now = performance.now();
+    for (const t of tr.pending.values()) if (now - t < STALE_REQUEST_MS) return false;
+    if (now - tr.lastActivity < QUIET_MS) return false;
+    const main = document.querySelector("main");
+    if (main) {
+      for (const el of Array.from(main.querySelectorAll<HTMLElement>(BUSY_SELECTOR))) {
+        if (el.getClientRects().length > 0) return false; // indicador visible: sigue cargando
+      }
+      for (const img of Array.from(main.querySelectorAll("img"))) if (!img.complete) return false;
+    }
+    return true;
+  }, []);
+
+  // Progreso estimado para la línea: hasta el cambio de ruta ~50 %, luego según peticiones.
+  const progress = useCallback(() => {
+    const tr = trackerRef.current;
+    if (!tr) return 0;
+    if (tr.routeAt === null) return 0.5 * (1 - Math.exp(-(performance.now() - tr.startedAt) / 1200));
+    return 0.6 + 0.32 * (tr.total ? tr.done / tr.total : 1);
+  }, []);
+
+  const done = useCallback(() => {
+    trackerRef.current = null;
+    setRunId(null);
+  }, []);
 
   return (
     <SplitLoaderContext.Provider value={{ start }}>
       {children}
-      {run &&
-        createPortal(<SplitLoaderOverlay key={run.id} isLoaded={() => loadedRef.current} onDone={done} />, document.body)}
+      {runId !== null &&
+        createPortal(
+          <SplitLoaderOverlay key={runId} isLoaded={isLoaded} progress={progress} onDone={done} />,
+          document.body,
+        )}
     </SplitLoaderContext.Provider>
   );
 }
 
-function SplitLoaderOverlay({ isLoaded, onDone }: { isLoaded: () => boolean; onDone: () => void }) {
+interface EngineHooks {
+  isLoaded: () => boolean;
+  progress: () => number;
+  onDone: () => void;
+}
+
+function SplitLoaderOverlay(props: EngineHooks) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const isLoadedRef = useRef(isLoaded);
-  const onDoneRef = useRef(onDone);
+  const hooksRef = useRef(props);
 
   useEffect(() => {
-    isLoadedRef.current = isLoaded;
-    onDoneRef.current = onDone;
+    hooksRef.current = props;
   });
 
   useEffect(() => {
@@ -81,8 +172,11 @@ function SplitLoaderOverlay({ isLoaded, onDone }: { isLoaded: () => boolean; onD
         backdrop: q("backdrop"),
         layers: [q("layerA"), q("layerB")],
       },
-      () => isLoadedRef.current(),
-      () => onDoneRef.current(),
+      {
+        isLoaded: () => hooksRef.current.isLoaded(),
+        progress: () => hooksRef.current.progress(),
+        onDone: () => hooksRef.current.onDone(),
+      },
     );
     return engine.destroy;
   }, []);
@@ -175,7 +269,13 @@ interface Elements {
   layers: [HTMLDivElement, HTMLDivElement];
 }
 
-function createEngine(els: Elements, isLoaded: () => boolean, onDone: () => void) {
+/**
+ * Velocidad de la animación una vez cargada la página, según lo que tardó (ms reales):
+ * cuanto más rápido llegó, más rápido se completa y se abre.
+ */
+const exitSpeed = (ms: number) => (ms < 700 ? 2.2 : ms < 1600 ? 1.8 : ms < 3000 ? 1.45 : 1.2);
+
+function createEngine(els: Elements, hooks: EngineHooks) {
   const { root, top, bottom, seam, fill, glow, backdrop, layers } = els;
 
   // --- letras: la principal y N copias para la estela ---
@@ -227,7 +327,10 @@ function createEngine(els: Elements, isLoaded: () => boolean, onDone: () => void
   };
   measure();
 
-  let tau = 0, last = performance.now(), raf = 0, shown = 0, clipped = true;
+  // tau = tiempo de la animación; avanza a `speed` veces el tiempo real
+  const startedAt = performance.now();
+  let tau = 0, last = startedAt, raf = 0, shown = 0, clipped = true;
+  let speed = 1, targetSpeed = 1;
   let loadedAt: number | null = null, tEnd: number | null = null;
 
   // --- poses (funciones puras del tiempo) ---
@@ -300,7 +403,7 @@ function createEngine(els: Elements, isLoaded: () => boolean, onDone: () => void
     return 12 * a * (1 - easeInOutCubic(remap(t, 0.52, 1.1)));
   };
 
-  const progressAt = (t: number) => (loadedAt !== null ? 1 : 0.92 * (1 - Math.exp(-t / 1.6)));
+  const progressAt = () => (loadedAt !== null ? 1 : clamp(hooks.progress(), 0, 0.95));
 
   const place = (el: HTMLElement, p: Pose) => {
     el.style.transform = `translate3d(${(p.x - gw / 2).toFixed(2)}px,${(p.y - gh / 2).toFixed(2)}px,0) rotate(${p.r.toFixed(2)}deg) scale(${p.s.toFixed(3)})`;
@@ -362,7 +465,7 @@ function createEngine(els: Elements, isLoaded: () => boolean, onDone: () => void
     glow.style.transform = `translateY(-50%) scale(${(0.6 + 0.4 * draw).toFixed(3)},${(0.8 + 0.5 * clamp(g, 0, 1.4)).toFixed(3)})`;
 
     // progreso dentro de la línea
-    shown += (progressAt(tau) - shown) * (1 - Math.exp(-dt * 5));
+    shown += (progressAt() - shown) * (1 - Math.exp(-dt * 5));
     fill.style.transform = `scaleX(${shown.toFixed(4)})`;
 
     // aparece la sección pedida
@@ -375,16 +478,18 @@ function createEngine(els: Elements, isLoaded: () => boolean, onDone: () => void
   const frame = (now: number) => {
     const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
     last = now;
-    tau += dt;
-    if (loadedAt === null && (isLoaded() || tau >= MAX_WAIT)) loadedAt = tau;
-    if (loadedAt !== null && tEnd === null) {
-      // se completa el giro en curso (mínimo uno)
-      const i = Math.max(1, Math.ceil((Math.max(loadedAt, INTRO) - INTRO) / P.hop - 1e-6));
-      tEnd = INTRO + i * P.hop;
+    const waited = now - startedAt;
+    if (loadedAt === null && (hooks.isLoaded() || waited >= MAX_WAIT * 1000)) {
+      loadedAt = tau;
+      targetSpeed = exitSpeed(waited);
+      // Si llegó durante la entrada, sale directo (sin giros); si no, termina el giro en curso.
+      tEnd = tau <= INTRO ? INTRO : INTRO + Math.ceil((tau - INTRO) / P.hop - 1e-6) * P.hop;
     }
+    speed += (targetSpeed - speed) * (1 - Math.exp(-dt * 6));
+    tau += dt * speed;
     if (tEnd !== null && tau >= tEnd + OUTRO) {
       raf = 0;
-      onDone();
+      hooks.onDone();
       return;
     }
     render(dt);
