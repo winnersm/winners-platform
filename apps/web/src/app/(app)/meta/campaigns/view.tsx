@@ -476,6 +476,10 @@ function MobileMetricGrid({ list, metrics, currency, loading }: {
 /** Lo que no está activo (pausado, archivado…) se ve apagado, en gris. El fondo de la celda
  *  se queda opaco para que las columnas fijas sigan tapando al hacer scroll. */
 const DIM_ROW = "[&>td]:grayscale [&>td>*]:opacity-50 hover:[&>td>*]:opacity-80";
+/** Las activas siempre arriba; dentro de cada grupo se respeta el orden elegido (sort estable). */
+function activeFirst<T>(rows: T[], statusOf: (r: T) => string | undefined): T[] {
+  return [...rows].sort((a, b) => Number(statusOf(b) === "ACTIVE") - Number(statusOf(a) === "ACTIVE"));
+}
 const dimIf = (status?: string) => (status && status !== "ACTIVE" ? DIM_ROW : "");
 
 /** Tarjeta de una campaña, ad set o anuncio. Tocarla entra al nivel siguiente, como la fila en desktop. */
@@ -1402,7 +1406,10 @@ function ManagerInner() {
     const v = m ? m[key] : null;
     return v == null ? -Infinity : v; // sin dato → al fondo
   }
-  function applySort<T extends { id: string; name: string }>(rows: T[]): T[] {
+  function applySort<T extends { id: string; name: string; status?: string }>(rows: T[]): T[] {
+    return activeFirst(sortBy(rows), r => r.status);
+  }
+  function sortBy<T extends { id: string; name: string }>(rows: T[]): T[] {
     if (!sort) return rows;
     const dir = sort.dir === "asc" ? 1 : -1;
     return [...rows].sort((a, b) => {
@@ -2073,6 +2080,8 @@ function GlobalCampaignsView() {
       return typeof va === "string" && typeof vb === "string" ? va.localeCompare(vb) * dir : ((va as number) - (vb as number)) * dir;
     });
   }
+
+  vis = activeFirst(vis, r => r.camp.status);
 
   // Totales en USD. Las monedas sin tasa no se suman y se avisa.
   const noRate = [...new Set(vis.filter(r => toUsd(r.currency) == null).map(r => r.currency ?? "?"))];
