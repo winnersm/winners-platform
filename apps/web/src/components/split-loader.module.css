@@ -1,0 +1,114 @@
+/* Pantalla de carga W/M al cambiar de sección (ver split-loader.tsx). */
+
+.root {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  overflow: hidden;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  background: #04070e;
+}
+
+.half {
+  position: absolute;
+  left: -24px;
+  right: -24px;
+  height: 50%;
+  overflow: hidden;
+  will-change: transform;
+  /* rejilla de puntos: hace visible el "corte" cuando las mitades se desplazan */
+  background-size: 18px 18px, auto, auto;
+}
+
+.top {
+  top: 0;
+  background-image:
+    radial-gradient(rgba(190, 205, 255, 0.075) 1px, transparent 1.3px),
+    radial-gradient(120% 55% at 50% 100%, rgba(76, 107, 255, 0.22), transparent 65%),
+    linear-gradient(180deg, #0a1020, #131c3c);
+  background-position: center bottom, 0 0, 0 0;
+}
+
+.bottom {
+  bottom: 0;
+  background-image:
+    radial-gradient(rgba(190, 205, 255, 0.075) 1px, transparent 1.3px),
+    radial-gradient(120% 55% at 50% 0%, rgba(76, 107, 255, 0.22), transparent 65%),
+    linear-gradient(0deg, #0a1020, #131c3c);
+  background-position: center top, 0 0, 0 0;
+}
+
+.glow {
+  position: absolute;
+  left: -15%;
+  right: -15%;
+  top: 50%;
+  height: 48%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(50% 50% at 50% 50%, rgba(86, 116, 255, 0.42), rgba(76, 107, 255, 0.1) 42%, transparent 70%);
+  mix-blend-mode: screen;
+}
+
+.seam {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, transparent, rgba(125, 152, 255, 0.6) 14%, rgba(125, 152, 255, 0.6) 86%, transparent);
+  box-shadow: 0 0 12px 1px rgba(76, 107, 255, 0.6);
+}
+
+.seamFill {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, transparent, #fff 16%, #fff 84%, transparent);
+  box-shadow: 0 0 8px 1px rgba(205, 218, 255, 0.9);
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  perspective: 760px;
+}
+
+.glyph {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+
+.glyph svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.main {
+  filter: drop-shadow(0 0 10px rgba(110, 140, 255, 0.5));
+}
+
+.ghost {
+  opacity: 0;
+}
+
+.defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}

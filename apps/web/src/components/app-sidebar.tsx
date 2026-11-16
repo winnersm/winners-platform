@@ -40,7 +40,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
+import { useSplitLoader } from "@/components/split-loader";
 import { can, canScope, ROLE_LABEL, type Grant, type Module, type Role } from "@winners/auth";
 
 /**
@@ -158,7 +160,17 @@ interface AppSidebarProps {
 
 export function AppSidebar({ role, grants, operations, userName, userEmail }: AppSidebarProps) {
   const pathname = usePathname();
+  const { setOpenMobile } = useSidebar();
+  const { start: startLoader } = useSplitLoader();
   const principal = { id: "", email: userEmail ?? "", role, grants, operations };
+
+  // Al cambiar de sección: se cierra el menú (en móvil) y la pantalla de carga
+  // W/M cubre la navegación hasta dejar visible la sección pedida.
+  const handleNav = (e: React.MouseEvent, href: string) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    setOpenMobile(false);
+    if (pathname !== href) startLoader(href);
+  };
 
   const groups = NAV_GROUPS.filter((g) => can(principal, g.module, "READ"))
     .map((g) => ({
@@ -209,7 +221,7 @@ export function AppSidebar({ role, grants, operations, userName, userEmail }: Ap
                           />
                         )}
                         <SidebarMenuButton
-                          render={<Link href={item.href} />}
+                          render={<Link href={item.href} onClick={(e) => handleNav(e, item.href)} />}
                           isActive={active}
                           className={`h-10 items-center gap-3 px-3.5 py-1.5 text-[15px] transition-[color,background-color,border-radius] duration-150 ease-out ${active ? "rounded-r-xl font-semibold" : ""}`}
                           style={active ? { background: accentObj.bgGradient } : undefined}
