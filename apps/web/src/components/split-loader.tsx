@@ -225,11 +225,12 @@ const P = {
 };
 
 const INTRO = 1.6; // s: corte de pantalla + aparición de las letras
-const OUTRO = 1.15; // s: sellado + separación
+const SWAP = 0.7; // s: W y M intercambian posición antes de abrir
+const OUTRO = SWAP + 1.15; // s: intercambio + sellado + separación
 const GAP = 1.5; // px: media abertura de la grieta mientras carga
 const TRAVEL = 0.8; // fracción de cada giro en movimiento (el resto, pausa en W sobre M)
 // unidades del dibujo (viewBox 140×120, letra de 112×72 centrada en 60,50)
-const U = { halfH: 36, nearGap: 6, spreadMax: 40 };
+const U = { halfH: 36, nearGap: 6, spreadMax: 40, swapBulge: 26 };
 
 const POINTS = "4,-10 36,86 60,36 84,86 116,-10";
 const glyphSVG = (stroke: string) =>
@@ -371,20 +372,30 @@ function createEngine(els: Elements, hooks: EngineHooks) {
       const lt = (t - INTRO) / P.hop, i = Math.floor(lt);
       return GAP + 1.4 * pulseAt(hopPose(i, lt - i));
     }
-    const o = t - tEnd;
+    const o = t - tEnd - SWAP; // negativo mientras se intercambian
     const seal = easeInOutCubic(remap(o, 0.1, 0.26));
-    const open = easeInOutCubic(remap(o, 0.3, OUTRO));
+    const open = easeInOutCubic(remap(o, 0.3, OUTRO - SWAP));
     return GAP * (1 - seal) + open * (H / 2 + 24);
   };
 
-  // Salida: el par está quieto en el medio, se aprieta contra la línea y se separa.
+  // Salida: primero W y M se intercambian (la de abajo sube, la de arriba baja)
+  // rodeándose en semicírculo sin girar sobre sí mismas; luego se aprietan contra
+  // la línea y cada mitad de la pantalla se lleva su letra (M arriba, W abajo).
   const outroPose = (t: number): Pose => {
     const iLast = Math.round(((tEnd as number) - INTRO) / P.hop) - 1;
     const st = iLast >= 0 ? hopPose(iLast, 1) : introPose(INTRO);
     const side = st.y <= cy ? -1 : 1;
-    const press = 4 * u * Math.sin(Math.PI * remap(t, 0, 0.42));
+    if (t < SWAP) {
+      const k = easeInOutCubic(t / SWAP);
+      const phi = Math.PI * k;
+      // se abren al pasar de lado para no chocarse
+      const R = restR() + U.swapBulge * u * Math.sin(Math.PI * k);
+      return { ...st, x: cx - side * R * Math.sin(phi), y: cy + side * R * Math.cos(phi), s: 1 + 0.05 * Math.sin(Math.PI * k) };
+    }
+    const o = t - SWAP;
+    const press = 4 * u * Math.sin(Math.PI * remap(o, 0, 0.42));
     const ride = Math.max(0, panelOffsetAt((tEnd as number) + t) - GAP);
-    return { ...st, x: cx, y: cy + side * (restR() - press + ride) };
+    return { ...st, x: cx, y: cy - side * (restR() - press + ride) };
   };
 
   const poseA = (t: number): Pose => {
@@ -417,7 +428,7 @@ function createEngine(els: Elements, hooks: EngineHooks) {
 
     // estela: la misma letra en instantes anteriores; se suaviza al abrirse
     const step = P.trailLength / 1000 / n;
-    const trailK = P.trail * (tEnd !== null && tau > tEnd ? 1 - 0.7 * remap(tau - tEnd, 0.3, 0.58) : 1);
+    const trailK = P.trail * (tEnd !== null && tau > tEnd ? 1 - 0.7 * remap(tau - tEnd - SWAP, 0.3, 0.58) : 1);
     for (let k = 1; k <= n; k++) {
       const ga = poseA(tau - k * step);
       const moved = clamp(Math.abs(a.r - ga.r) / 22 + Math.hypot(a.x - ga.x, a.y - ga.y) / 14, 0, 1);
@@ -453,11 +464,13 @@ function createEngine(els: Elements, hooks: EngineHooks) {
     } else if (phase === "loop") {
       g = 0.25 + 0.75 * pulseAt(a);
     } else {
-      const o = tau - (tEnd as number);
+      const o = tau - (tEnd as number) - SWAP;
       const flash = Math.sin(Math.PI * remap(o, 0.08, 0.5));
       alpha = 1 - easeInCubic(remap(o, 0.3, 0.58));
       scaleY = 1 + 2.4 * flash;
-      g = (0.3 + 1.1 * flash) * (1 - remap(o, 0.45, 0.8));
+      g = o < 0
+        ? 0.25 + 0.75 * pulseAt(a) // la línea brilla cuando pasan por ella al intercambiarse
+        : (0.3 + 1.1 * flash) * (1 - remap(o, 0.45, 0.8));
     }
     seam.style.transform = `scale(${draw.toFixed(4)},${scaleY.toFixed(3)})`;
     seam.style.opacity = alpha.toFixed(3);
@@ -469,7 +482,7 @@ function createEngine(els: Elements, hooks: EngineHooks) {
     fill.style.transform = `scaleX(${shown.toFixed(4)})`;
 
     // aparece la sección pedida
-    const reveal = tEnd !== null && tau >= tEnd ? easeOutCubic(remap(tau - tEnd, 0.36, 1.08)) : 0;
+    const reveal = tEnd !== null && tau >= tEnd ? easeOutCubic(remap(tau - tEnd - SWAP, 0.36, 1.08)) : 0;
     backdrop.style.opacity = (1 - reveal).toFixed(3);
     // a mitad de la apertura ya se puede usar la página
     root.style.pointerEvents = reveal > 0.5 ? "none" : "auto";
