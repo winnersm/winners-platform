@@ -475,7 +475,7 @@ function MobileMetricGrid({ list, metrics, currency, loading }: {
 
 /** Lo que no está activo (pausado, archivado…) se ve apagado, en gris. El fondo de la celda
  *  se queda opaco para que las columnas fijas sigan tapando al hacer scroll. */
-const DIM_ROW = "[&>td]:grayscale [&>td>*]:opacity-50 hover:[&>td>*]:opacity-80";
+const DIM_ROW = "[&>td]:bg-card hover:[&>td]:bg-muted [&>td]:grayscale [&>td>*]:opacity-50 hover:[&>td>*]:opacity-80";
 /** Las activas siempre arriba; dentro de cada grupo se respeta el orden elegido (sort estable). */
 function activeFirst<T>(rows: T[], statusOf: (r: T) => string | undefined): T[] {
   return [...rows].sort((a, b) => Number(statusOf(b) === "ACTIVE") - Number(statusOf(a) === "ACTIVE"));
