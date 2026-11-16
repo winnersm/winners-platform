@@ -473,10 +473,17 @@ function MobileMetricGrid({ list, metrics, currency, loading }: {
   );
 }
 
+/** Lo que no está activo (pausado, archivado…) se ve apagado, en gris. El fondo de la celda
+ *  se queda opaco para que las columnas fijas sigan tapando al hacer scroll. */
+const DIM_ROW = "[&>td]:grayscale [&>td>*]:opacity-50 hover:[&>td>*]:opacity-80";
+const dimIf = (status?: string) => (status && status !== "ACTIVE" ? DIM_ROW : "");
+
 /** Tarjeta de una campaña, ad set o anuncio. Tocarla entra al nivel siguiente, como la fila en desktop. */
 function MobileCard({
-  name, tag, detail, metrics, currency, loading, stripe, selected, onToggle, status, onOpen, openLabel, onDuplicate, onCharts, href,
+  name, tag, detail, metrics, currency, loading, stripe, selected, onToggle, status, onOpen, openLabel, onDuplicate, onCharts, href, dim,
 }: {
+  /** No está activa: se ve en gris. */
+  dim?: boolean;
   name: string; tag?: ReactNode; detail?: ReactNode; metrics: Metrics | null; currency: string; loading: boolean; stripe: string;
   selected: boolean; onToggle: () => void; status: ReactNode;
   onOpen?: () => void; openLabel?: string; onDuplicate?: () => void; onCharts?: () => void; href: string;
@@ -485,7 +492,7 @@ function MobileCard({
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   return (
     <article
-      className={`rounded-lg border transition-colors ${stripe} ${selected ? "border-primary/50 bg-primary/5" : "bg-card"} ${onOpen ? "cursor-pointer active:bg-muted" : ""}`}
+      className={`rounded-lg border transition-colors ${stripe} ${selected ? "border-primary/50 bg-primary/5" : "bg-card"} ${onOpen ? "cursor-pointer active:bg-muted" : ""} ${dim ? "opacity-60 grayscale" : ""}`}
       onClick={onOpen}
     >
       <div className="flex items-start gap-1 pl-1 pr-3 pt-1">
@@ -1706,7 +1713,7 @@ function ManagerInner() {
             const sc = level === "campaign" ? undefined : rowScope(r as Partial<Ad>);
             return (
               <MobileCard
-                key={r.id} name={r.name}
+                key={r.id} name={r.name} dim={r.status !== "ACTIVE"}
                 tag={sc ? (<>
                   <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: sc.color }} aria-hidden />
                   <span className="truncate">{sc.name}</span>
@@ -1776,7 +1783,7 @@ function ManagerInner() {
                 ) : visCampaigns.map(c => {
                   const ins = insightsMap[c.id];
                   return (
-                    <TableRow key={c.id} className="group cursor-pointer hover:bg-muted" onClick={() => drillAdsets(c)}>
+                    <TableRow key={c.id} className={`group cursor-pointer hover:bg-muted ${dimIf(c.status)}`} onClick={() => drillAdsets(c)}>
                       <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedCampaignIds.has(c.id)} onToggle={() => toggleOne(c.id)} label={`Seleccionar ${c.name}`} />
                       </TableCell>
@@ -1817,7 +1824,7 @@ function ManagerInner() {
                 ) : visAdsets.map(a => {
                   const ins = insightsMap[a.id];
                   return (
-                    <TableRow key={a.id} className="group cursor-pointer hover:bg-muted" onClick={() => drillAds(a)}>
+                    <TableRow key={a.id} className={`group cursor-pointer hover:bg-muted ${dimIf(a.status)}`} onClick={() => drillAds(a)}>
                       <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedAdsetIds.has(a.id)} onToggle={() => toggleOne(a.id)} label={`Seleccionar ${a.name}`} />
                       </TableCell>
@@ -1861,7 +1868,7 @@ function ManagerInner() {
                 ) : visAds.map(ad => {
                   const ins = insightsMap[ad.id];
                   return (
-                    <TableRow key={ad.id} className="group hover:bg-muted">
+                    <TableRow key={ad.id} className={`group hover:bg-muted ${dimIf(ad.status)}`}>
                       <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, !loadingInsights)}`} onClick={e => e.stopPropagation()}>
                         <Checkbox checked={selectedAdIds.has(ad.id)} onToggle={() => toggleOne(ad.id)} label={`Seleccionar ${ad.name}`} />
                       </TableCell>
@@ -2198,7 +2205,7 @@ function GlobalCampaignsView() {
           const k = keyOf(r);
           return (
             <MobileCard
-              key={k} name={r.camp.name} detail={r.accName}
+              key={k} name={r.camp.name} detail={r.accName} dim={r.camp.status !== "ACTIVE"}
               metrics={calcMetrics(ins)} currency={r.currency ?? "USD"} loading={false}
               stripe={stripeClass(ins, true)}
               selected={selected.has(k)} onToggle={() => toggleOne(k)}
@@ -2251,7 +2258,7 @@ function GlobalCampaignsView() {
               const ins = insMap[r.camp.id];
               const k = keyOf(r);
               return (
-                <TableRow key={k} className="group cursor-pointer hover:bg-muted" onClick={() => openCampaign(r)}>
+                <TableRow key={k} className={`group cursor-pointer hover:bg-muted ${dimIf(r.camp.status)}`} onClick={() => openCampaign(r)}>
                   <TableCell className={`py-2 ${STICKY_CHECK} ${stripeClass(ins, true)}`} onClick={e => e.stopPropagation()}>
                     <Checkbox checked={selected.has(k)} onToggle={() => toggleOne(k)} label={`Seleccionar ${r.camp.name}`} />
                   </TableCell>
