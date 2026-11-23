@@ -2,6 +2,7 @@ import { Prisma } from "@winners/db";
 import { prisma } from "@winners/db";
 import { getAdAccounts, getAccountInsights, getDailyAccountInsights, type MetaInsights } from "@/lib/meta-api";
 import { coveringRange, periodRange, sumDays, type DateRange } from "@/lib/insight-periods";
+import { saveSpendDays } from "@/lib/spend-history";
 
 // Filtros de fecha que se sincronizan a DB. Ritmo del job: lo que incluye hoy, cada
 // hora; los periodos cerrados, una vez al día. Solo las fechas personalizadas se
@@ -68,6 +69,12 @@ export async function syncDashboardForOperation(
       try {
         const days = await getDailyAccountInsights(rawId, window.since, window.until, a.bmId, operationId);
         for (const [preset, range] of ranges) results.push([preset, sumDays(days, range)]);
+        // Los mismos días alimentan el libro de Gasto histórico: sin otra llamada a Meta.
+        try {
+          await saveSpendDays(operationId, a, window, days);
+        } catch (e) {
+          console.warn(`[dashboard-sync] libro de gasto ${rawId}:`, e instanceof Error ? e.message : e);
+        }
       } catch {
         failed += ranges.size;
       }

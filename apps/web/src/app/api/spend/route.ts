@@ -5,13 +5,13 @@ import { getSpendByRange } from "@/lib/spend-history";
 import { prisma } from "@winners/db";
 
 // Gasto histórico por rango de fechas (desde el libro diario AccountSpendDaily).
-// Instantáneo, no toca Meta: lo alimenta el job SYNC_SPEND_DAILY.
+// Instantáneo, no toca Meta: lo alimenta el sync de Rendimiento (dashboard-sync).
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const op = await getActiveOperationId();
-  if (!op) return NextResponse.json({ rows: [], totals: { spend: 0, revenue: 0, sales: 0 }, series: [] });
+  if (!op) return NextResponse.json({ rows: [], totals: [], daily: [] });
 
   const fromStr = req.nextUrl.searchParams.get("from");
   const toStr = req.nextUrl.searchParams.get("to");

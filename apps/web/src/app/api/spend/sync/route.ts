@@ -5,7 +5,7 @@ import { getAdAccounts } from "@/lib/meta-api";
 import { syncSpendDailyForOperation } from "@/lib/spend-history";
 
 // Actualiza el libro diario de la operación activa con los últimos días.
-// Es lo mismo que hace el job de las 6:00 AM, pero a demanda.
+// Normalmente lo alimenta el sync de Rendimiento cada hora; esto es a demanda.
 export async function POST() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });

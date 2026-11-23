@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, RefreshCw, TrendingUp, History } from "lucide-react";
+import { CalendarDays, RefreshCw, TrendingUp, History, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,15 @@ interface Row {
   revenue: number;
   sales: number;
   days: number;
+  removedFromBm: boolean;
+}
+interface DayRow {
+  date: string;
+  currency: string | null;
+  spend: number;
+  revenue: number;
+  sales: number;
+  accounts: number;
 }
 interface CurrencyTotal {
   currency: string | null;
@@ -30,7 +39,7 @@ interface CurrencyTotal {
 interface Result {
   rows: Row[];
   totals: CurrencyTotal[];
-  series: Array<{ date: string; spend: number; revenue: number }>;
+  daily: DayRow[];
   lastSync?: string | null;
 }
 
@@ -49,6 +58,20 @@ function ymd(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+// Todos los días del rango (inclusive), para que la gráfica muestre también los días sin gasto.
+function daysBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  const d = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  while (d <= end && out.length < 1200) { out.push(ymd(d)); d.setDate(d.getDate() + 1); }
+  return out;
+}
+
+function dayLabel(date: string): string {
+  const d = new Date(`${date}T00:00:00`);
+  return d.toLocaleDateString("es-CO", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
 function quickRanges(): { label: string; from: string; to: string }[] {
@@ -78,16 +101,27 @@ export default function SpendView() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [mode, setMode] = useState<"accounts" | "days">("accounts");
+  const [chartCurrency, setChartCurrency] = useState<string | null>(null);
+  // Rango desde el que se entró a un día, para poder volver.
+  const [prevRange, setPrevRange] = useState<{ from: string; to: string } | null>(null);
+
+  const openDay = (date: string) => {
+    if (from !== to) setPrevRange({ from, to });
+    setFrom(date);
+    setTo(date);
+    setMode("accounts");
+  };
 
   const load = useCallback(async (f: string, t: string) => {
     setLoading(true);
     try {
       const res = await fetch(`/api/spend?from=${f}&to=${t}`);
       const json = await res.json();
-      if (!res.ok) { setData({ rows: [], totals: [], series: [] }); return; }
+      if (!res.ok) { setData({ rows: [], totals: [], daily: [] }); return; }
       setData(json as Result);
     } catch {
-      setData({ rows: [], totals: [], series: [] });
+      setData({ rows: [], totals: [], daily: [] });
     } finally {
       setLoading(false);
     }
@@ -95,14 +129,15 @@ export default function SpendView() {
 
   useEffect(() => { load(from, to); }, [from, to, load]);
 
-  // Actualiza los últimos días (lo mismo que el job de las 6:00 AM, a demanda).
+  // Actualiza los últimos días a demanda (normalmente lo hace el sync de Rendimiento cada hora).
   const doSync = useCallback(async () => {
     setSyncing(true);
     try {
       const res = await fetch("/api/spend/sync", { method: "POST" });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "No se pudo sincronizar"); return; }
-      toast.success(`Actualizado: ${json.accounts} cuentas · ${json.days} días`);
+      if (json.failed?.length) toast.warning(`Actualizado: ${json.accounts} cuentas · ${json.days} días. Sin datos de ${json.failed.length}: ${json.failed.slice(0, 3).join(", ")}${json.failed.length > 3 ? "…" : ""}`);
+      else toast.success(`Actualizado: ${json.accounts} cuentas · ${json.days} días`);
       await load(from, to);
     } catch { toast.error("Error de red al sincronizar"); }
     finally { setSyncing(false); }
@@ -127,8 +162,19 @@ export default function SpendView() {
   }, [from, to, load]);
 
   const activeRange = ranges.find((r) => r.from === from && r.to === to)?.label;
-  const maxSpend = Math.max(1, ...(data?.series ?? []).map((s) => s.spend));
   const totByC = data?.totals ?? [];
+  const daily = useMemo(() => data?.daily ?? [], [data]);
+  // La gráfica muestra una sola moneda (por defecto la de mayor gasto).
+  const currencies = totByC.map((t) => t.currency);
+  const mainCurrency = [...totByC].sort((a, b) => b.spend - a.spend)[0]?.currency ?? null;
+  const chartCur = chartCurrency !== null && currencies.includes(chartCurrency) ? chartCurrency : mainCurrency;
+  const chartSeries = useMemo(() => {
+    const byDate = new Map(daily.filter((d) => d.currency === chartCur).map((d) => [d.date, d.spend]));
+    return daysBetween(from, to).map((date) => ({ date, spend: byDate.get(date) ?? 0 }));
+  }, [daily, chartCur, from, to]);
+  const maxSpend = Math.max(1, ...chartSeries.map((s) => s.spend));
+  const daysDesc = useMemo(() => [...daily].sort((a, b) => b.date.localeCompare(a.date) || (a.currency ?? "").localeCompare(b.currency ?? "")), [daily]);
+  const isSingleDay = from === to;
 
   const Card = ({ label, value, tone }: { label: string; value: string; tone?: "pos" | "neg" }) => (
     <div className="min-w-0 rounded-xl border bg-white p-4 max-md:p-3">
@@ -171,6 +217,11 @@ export default function SpendView() {
           <label className="text-[11px] text-muted-foreground">Hasta</label>
           <Input type="date" value={to} min={from} max={ymd(new Date())} onChange={(e) => e.target.value && setTo(e.target.value)} className="h-9 w-40 bg-white max-md:h-10 max-md:w-full" />
         </div>
+        {isSingleDay && prevRange && (
+          <Button variant="outline" size="sm" className="h-9 px-2.5 text-xs" onClick={() => { setFrom(prevRange.from); setTo(prevRange.to); setPrevRange(null); setMode("days"); }}>
+            <ArrowLeft className="h-3.5 w-3.5 mr-1" /> Volver a {prevRange.from} → {prevRange.to}
+          </Button>
+        )}
         <Button variant="ghost" size="sm" className="h-9 px-2" onClick={() => load(from, to)} disabled={loading} title="Recargar">
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
         </Button>
@@ -181,7 +232,7 @@ export default function SpendView() {
               variant={activeRange === r.label ? "secondary" : "ghost"}
               size="sm"
               className="h-8 px-2.5 text-xs"
-              onClick={() => { setFrom(r.from); setTo(r.to); }}
+              onClick={() => { setFrom(r.from); setTo(r.to); setPrevRange(null); }}
             >
               {r.label}
             </Button>
@@ -217,24 +268,93 @@ export default function SpendView() {
         </div>
       )}
 
-      {/* Mini-gráfica diaria */}
-      {!loading && (data?.series.length ?? 0) > 0 && (
+      {/* Gráfica diaria: clic en una barra abre ese día */}
+      {!loading && !isSingleDay && chartSeries.length > 0 && (
         <div className="rounded-lg border bg-white p-3">
-          <div className="text-[11px] text-muted-foreground mb-2">Gasto por día</div>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="text-[11px] text-muted-foreground">Gasto por día{chartCur ? ` (${chartCur})` : ""} · clic en un día para ver sus cuentas</div>
+            {currencies.length > 1 && (
+              <div className="ml-auto flex gap-1">
+                {currencies.map((c) => (
+                  <Button key={c ?? "null"} size="sm" variant={c === chartCur ? "secondary" : "ghost"} className="h-6 px-2 text-[11px]" onClick={() => setChartCurrency(c)}>
+                    {c ?? "SIN MONEDA"}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="flex items-end gap-[2px] h-24">
-            {data!.series.map((s) => (
-              <div
+            {chartSeries.map((s) => (
+              <button
                 key={s.date}
-                className="flex-1 bg-blue-400/70 hover:bg-blue-500 rounded-t"
-                style={{ height: `${Math.max(2, (s.spend / maxSpend) * 100)}%` }}
-                title={`${s.date}: ${fmtMoney(s.spend)}`}
+                type="button"
+                onClick={() => openDay(s.date)}
+                className={`flex-1 rounded-t ${s.spend > 0 ? "bg-blue-400/70 hover:bg-blue-600" : "bg-muted hover:bg-muted-foreground/30"}`}
+                style={{ height: `${s.spend > 0 ? Math.max(3, (s.spend / maxSpend) * 100) : 2}%` }}
+                title={`${dayLabel(s.date)}: ${fmtMoney(s.spend)}`}
               />
             ))}
+          </div>
+          <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+            <span>{from}</span><span>{to}</span>
           </div>
         </div>
       )}
 
+      {/* Selector de vista */}
+      {!isSingleDay && (
+        <div className="flex gap-1">
+          <Button size="sm" variant={mode === "accounts" ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setMode("accounts")}>Por cuenta</Button>
+          <Button size="sm" variant={mode === "days" ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setMode("days")}>Por día</Button>
+        </div>
+      )}
+      {isSingleDay && (
+        <div className="text-sm font-medium capitalize">{dayLabel(from)}</div>
+      )}
+
+      {/* Tabla por día */}
+      {mode === "days" && !isSingleDay && (
+        <div className="rounded-lg border overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="min-w-[160px]">DÍA</TableHead>
+                <TableHead className="text-right">GASTO</TableHead>
+                <TableHead className="text-right">REVENUE</TableHead>
+                <TableHead className="text-right">PROFIT</TableHead>
+                <TableHead className="text-right">VENTAS</TableHead>
+                <TableHead className="text-right">CUENTAS</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                Array.from({ length: 6 }).map((_, i) => (
+                  <TableRow key={i}><TableCell colSpan={6} className="py-2"><Skeleton className="h-6 w-full" /></TableCell></TableRow>
+                ))
+              ) : daysDesc.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground text-sm">Sin gasto registrado en este rango</TableCell></TableRow>
+              ) : daysDesc.map((d) => {
+                const profit = d.revenue - d.spend;
+                return (
+                  <TableRow key={`${d.date}-${d.currency}`} className="cursor-pointer hover:bg-muted/50" onClick={() => openDay(d.date)}>
+                    <TableCell className="py-2 text-xs font-medium capitalize">
+                      {dayLabel(d.date)}{currencies.length > 1 && d.currency ? <span className="text-muted-foreground"> ({d.currency})</span> : null}
+                    </TableCell>
+                    <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(d.spend)}</TableCell>
+                    <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(d.revenue)}</TableCell>
+                    <TableCell className={`py-2 text-right text-xs tabular-nums font-medium ${profit > 0 ? "text-green-600" : profit < 0 ? "text-red-600" : ""}`}>{fmtMoney(profit)}</TableCell>
+                    <TableCell className="py-2 text-right text-xs tabular-nums">{fmtInt(d.sales)}</TableCell>
+                    <TableCell className="py-2 text-right text-xs tabular-nums text-muted-foreground">{d.accounts}</TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
       {/* Tabla por cuenta */}
+      {(mode === "accounts" || isSingleDay) && (
       <div className="rounded-lg border overflow-x-auto">
         <Table>
           <TableHeader>
@@ -259,7 +379,10 @@ export default function SpendView() {
               const currLabel = r.currency ? ` (${r.currency})` : "";
               return (
                 <TableRow key={r.accountId}>
-                  <TableCell className="py-2 max-md:sticky max-md:left-0 max-md:z-10 max-md:bg-card"><span className="text-xs font-medium line-clamp-2">{r.name}{currLabel}</span></TableCell>
+                  <TableCell className="py-2 max-md:sticky max-md:left-0 max-md:z-10 max-md:bg-card"><span className="text-xs font-medium line-clamp-2">{r.name}{currLabel}</span>
+                    {r.removedFromBm && (
+                      <span className="mt-0.5 inline-block rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700" title="Meta ya no devuelve esta cuenta en ningún BM; se conserva su histórico">Eliminada del BM</span>
+                    )}</TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(r.spend)}</TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(r.revenue)}</TableCell>
                   <TableCell className={`py-2 text-right text-xs tabular-nums font-medium ${profit > 0 ? "text-green-600" : profit < 0 ? "text-red-600" : ""}`}>{fmtMoney(profit)}</TableCell>
@@ -271,6 +394,7 @@ export default function SpendView() {
           </TableBody>
         </Table>
       </div>
+      )}
     </div>
   );
 }

@@ -403,9 +403,10 @@ console.log("[worker] Listo: colas 'duplications' (trabajos de usuario) y 'syncs
     await syncQueue.upsertJobScheduler("sync-listings-history-weekly", { pattern: "0 5 * * 1", tz: bogota }, { name: JOB_TYPES.SYNC_LISTINGS, data: { scope: "all", presets: WEEKLY_HISTORY_PRESETS, structure: false }, opts });
     // Fanpages: una vez al día a las 5:00 AM (hora Colombia); el botón "Sincronizar" cubre lo urgente.
     await syncQueue.upsertJobScheduler("sync-fanpages", { pattern: "0 5 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_FANPAGES, opts });
-    // Gasto diario: 6:00 AM (hora Colombia). Reescribe los últimos días para captar ajustes tardíos de Meta.
-    await syncQueue.upsertJobScheduler("sync-spend-daily", { pattern: "0 6 * * *", tz: "America/Bogota" }, { name: JOB_TYPES.SYNC_SPEND_DAILY, opts });
-    console.log("[worker] Sync programado: rendimiento (hoy y este mes 1 h, periodos cerrados 5:10) + listados y «hoy» (5:30, 12:00, 17:30) + históricos (5:00; 30 días los lunes) + fanpages (5:00 AM) + gasto diario (6:00 AM).");
+    // Gasto histórico: ya no tiene job propio. El sync de Rendimiento guarda en el libro
+    // los mismos días que pide a Meta (cada hora el mes en curso; a las 5:10 desde el mes pasado).
+    await syncQueue.removeJobScheduler("sync-spend-daily");
+    console.log("[worker] Sync programado: rendimiento (hoy y este mes 1 h, periodos cerrados 5:10) + listados y «hoy» (5:30, 12:00, 17:30) + históricos (5:00; 30 días los lunes) + fanpages (5:00 AM). Rendimiento también alimenta Gasto histórico.");
   } catch (e) {
     console.error("[worker] No se pudo programar los syncs:", e);
   }
