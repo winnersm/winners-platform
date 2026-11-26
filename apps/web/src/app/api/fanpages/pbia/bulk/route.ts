@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
       module: "META",
       userId: session.user.id,
       action: "CREATE_PBIA_BULK",
-      entityType: "FanpageToken",
+      entityType: "Fanpage",
       entityId: dbJob.id,
       payload: { count: pageIds.length },
     },

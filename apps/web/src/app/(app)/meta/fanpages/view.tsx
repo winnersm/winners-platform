@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { notifyJobsChanged, openJobsDock } from "@/lib/jobs-dock-events";
 import {
   Contact, RefreshCw, Search, ArrowDownAZ, ArrowUpZA, Copy, Check,
   KeyRound, Loader2, Sparkles, Download, ShieldCheck, Megaphone, ExternalLink,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -17,9 +17,6 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
 
 interface FanPage {
   id: string;
@@ -40,119 +37,21 @@ interface FanPage {
 // undefined = sin verificar · null = no tiene · string = ig_id
 type PbiaState = Record<string, string | null | undefined>;
 
-// ─── Setup del token (cuando no hay ninguno configurado) ─────────────────────
-function TokenSetup({ onSaved }: { onSaved: () => void }) {
-  const [token, setToken] = useState("");
-  const [name, setName] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    if (!token.trim()) return;
-    setSaving(true);
-    try {
-      const res = await fetch("/api/fanpages/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token.trim(), name: name.trim() || undefined }),
-      });
-      const json = await res.json();
-      if (!res.ok) { toast.error(json.error ?? "Error al guardar"); return; }
-      toast.success(`Token de Fanpages guardado (${json.name})`);
-      onSaved();
-    } catch {
-      toast.error("Error de red");
-    } finally {
-      setSaving(false);
-    }
-  }
-
+// ─── Sin BM con token (Fanpages usa los tokens de Ajustes) ───────────────────
+function NoBmToken({ message }: { message: string }) {
   return (
     <div className="max-w-lg mx-auto mt-10 border rounded-xl bg-white p-6 space-y-4">
       <div className="flex items-center gap-2">
         <KeyRound className="h-5 w-5 text-primary" />
-        <h2 className="font-semibold">Conectar token de Fanpages</h2>
+        <h2 className="font-semibold">Sin token para cargar las fanpages</h2>
       </div>
       <p className="text-sm text-muted-foreground">
-        Este token es <strong>exclusivo</strong> para la sección Fanpages (listar páginas y gestionar PBIA).
-        No se mezcla con los Business Managers. Necesita los permisos <code>pages_show_list</code>,{" "}
-        <code>pages_read_engagement</code> y <code>business_management</code>.
+        {message}. Fanpages usa los tokens de System User de los Business Managers
+        configurados en Ajustes; para listar páginas y gestionar PBIA necesitan los permisos{" "}
+        <code>pages_show_list</code>, <code>pages_read_engagement</code> y <code>business_management</code>.
       </p>
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium">Nombre (opcional)</label>
-        <Input placeholder="Ej. Fanpages Indonesia" value={name} onChange={(e) => setName(e.target.value)} className="bg-white" />
-      </div>
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium">Access Token</label>
-        <Input placeholder="EAA..." value={token} onChange={(e) => setToken(e.target.value)} className="bg-white font-mono text-xs" />
-      </div>
-      <Button onClick={save} disabled={saving || !token.trim()} className="w-full">
-        {saving ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Validando…</> : "Guardar token"}
-      </Button>
+      <Link href="/admin/settings" className={buttonVariants({ className: "w-full" })}>Ir a Ajustes</Link>
     </div>
-  );
-}
-
-// ─── Cambiar el token de Fanpages (cuando ya hay uno configurado) ────────────
-function ChangeTokenDialog({ currentName, onSaved }: { currentName: string; onSaved: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [token, setToken] = useState("");
-  const [name, setName] = useState(currentName);
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    if (!token.trim()) return;
-    setSaving(true);
-    try {
-      const res = await fetch("/api/fanpages/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token.trim(), name: name.trim() || undefined }),
-      });
-      const json = await res.json();
-      if (!res.ok) { toast.error(json.error ?? "Error al guardar"); return; }
-      toast.success(`Token actualizado (${json.name})`);
-      setOpen(false); setToken("");
-      onSaved();
-    } catch {
-      toast.error("Error de red");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <>
-      <Button variant="outline" size="sm" onClick={() => { setName(currentName); setToken(""); setOpen(true); }} title="Cambiar el token de Fanpages de esta operación">
-        <KeyRound className="h-4 w-4 mr-1" /> Cambiar token
-      </Button>
-      <Dialog open={open} onOpenChange={(v) => !saving && setOpen(v)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><KeyRound className="h-4 w-4" /> Cambiar token de Fanpages</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Reemplaza el token de la <strong>operación activa</strong>. Necesita los permisos{" "}
-              <code>pages_show_list</code>, <code>pages_read_engagement</code> y <code>business_management</code>.
-            </p>
-            <div className="space-y-1">
-              <label className="text-xs font-medium">Nombre (opcional)</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} className="bg-white" />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium">Nuevo Access Token</label>
-              <Input placeholder="EAA..." value={token} onChange={(e) => setToken(e.target.value)} className="bg-white font-mono text-xs" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancelar</Button>
-            <Button onClick={save} disabled={saving || !token.trim()}>
-              {saving ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Validando…</> : "Guardar"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }
 
@@ -184,7 +83,7 @@ function PbiaCell({ state, onCreate, creating }: { state: string | null | undefi
 export default function FanpagesView() {
 
   const [configured, setConfigured] = useState<boolean | null>(null);
-  const [tokenName, setTokenName] = useState<string>("");
+  const [noTokenMsg, setNoTokenMsg] = useState("");
   const [pages, setPages] = useState<FanPage[]>([]);
   const [pbia, setPbia] = useState<PbiaState>({});
   const [loading, setLoading] = useState(true);
@@ -204,19 +103,14 @@ export default function FanpagesView() {
   const [bulking, setBulking] = useState(false);
   const verifyRun = useRef(0);
 
-  const loadToken = useCallback(async () => {
-    const res = await fetch("/api/fanpages/token");
-    const json = await res.json();
-    setConfigured(!!json.configured);
-    setTokenName(json.token?.name ?? "");
-  }, []);
-
+  // `loading` arranca en true; quien recarga después lo pone en true antes de
+  // llamar (así el efecto inicial no hace setState síncrono).
   const loadPages = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await fetch("/api/fanpages");
       const json = await res.json();
-      if (res.status === 409) { setConfigured(false); return; }
+      if (res.status === 409) { setConfigured(false); setNoTokenMsg(json.error ?? ""); return; }
+      setConfigured(true);
       if (!res.ok) { toast.error(json.error ?? "Error"); return; }
       const list: FanPage[] = json.pages ?? [];
       setPages(list);
@@ -238,6 +132,8 @@ export default function FanpagesView() {
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Error al sincronizar"); return; }
       toast.success(`Sincronizadas ${json.synced} páginas${json.removed ? ` · ${json.removed} eliminadas (sin acceso)` : ""}`);
+      if (json.failed?.length) toast.warning(`Algunos BM no devolvieron páginas: ${json.failed.join(" · ")}`);
+      setLoading(true);
       await loadPages();
     } catch {
       toast.error("Error de red");
@@ -264,8 +160,7 @@ export default function FanpagesView() {
     }
   }, []);
 
-  useEffect(() => { loadToken(); }, [loadToken]);
-  useEffect(() => { if (configured) loadPages(); }, [configured, loadPages]);
+  useEffect(() => { loadPages(); }, [loadPages]);
 
   // Verificar el estado PBIA en lotes (progresivo, cacheado en el server).
   const verifyPbia = useCallback(async (ids: string[]) => {
@@ -391,7 +286,7 @@ export default function FanpagesView() {
   if (configured === null) {
     return <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded" />)}</div>;
   }
-  if (!configured) return <TokenSetup onSaved={() => { setConfigured(true); loadToken(); }} />;
+  if (!configured) return <NoBmToken message={noTokenMsg || "No hay Business Manager con token activo en Ajustes"} />;
 
   const allChecked = visible.length > 0 && sel.size === visible.length;
 
@@ -404,11 +299,9 @@ export default function FanpagesView() {
           <span className="text-sm text-muted-foreground">
             {loading ? "Cargando…" : `${visible.length}${visible.length !== pages.length ? ` / ${pages.length}` : ""} páginas`}
           </span>
-          {tokenName && <Badge variant="secondary" className="text-[11px] gap-1"><ShieldCheck className="h-3 w-3" />{tokenName}</Badge>}
           {lastSync && <span className="text-[11px] text-muted-foreground/60">· sync {new Date(lastSync).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <ChangeTokenDialog currentName={tokenName} onSaved={() => { loadToken(); loadPages(); }} />
           <Button variant="outline" size="sm" onClick={() => verifyPbia(visible.map((p) => p.id))} disabled={verifying || loading || pages.length === 0}>
             {verifying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
             Verificar PBIA

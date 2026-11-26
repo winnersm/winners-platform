@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getFanpagesFromDB, hasFanpageToken, lastSyncedAt } from "@/lib/fanpages-api";
+import { getFanpagesFromDB, hasFanpageToken, lastSyncedAt, NO_BM_TOKEN_MSG } from "@/lib/fanpages-api";
 import { getActiveOperationId } from "@/lib/operation";
 
 // Lista las páginas de la operación desde la DB (instantáneo, sin tocar Facebook).
@@ -10,7 +10,7 @@ export async function GET() {
   const op = (await getActiveOperationId()) ?? undefined;
 
   if (!(await hasFanpageToken(op))) {
-    return NextResponse.json({ error: "No hay token de Fanpages configurado", configured: false }, { status: 409 });
+    return NextResponse.json({ error: NO_BM_TOKEN_MSG, configured: false }, { status: 409 });
   }
 
   const [rows, lastSync] = await Promise.all([getFanpagesFromDB(op), lastSyncedAt(op)]);
