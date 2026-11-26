@@ -1429,8 +1429,18 @@ function ManagerInner() {
   const scopedAds = campScope ? ads.filter(a => scopeOf(a.campaign_id, a.adset_id)) : ads;
 
   const visCampaigns = applySort(filterData(campaigns));
-  const visAdsets = applySort(filterData(scopedAdsets));
-  const visAds = applySort(filterData(scopedAds));
+  // Con varias campañas elegidas, las filas salen agrupadas por campaña (en el orden
+  // en que se eligieron); dentro de cada grupo se respeta el orden normal.
+  const scopeIdx = new Map((campScope ?? []).map((c, i) => [c.id, i]));
+  const groupByScope = <T extends { campaign_id?: string; adset_id?: string }>(rows: T[]): T[] => {
+    if (!campScope || campScope.length < 2) return rows;
+    const idx = (r: T) => scopeIdx.get(scopeOf(r.campaign_id, r.adset_id)?.id ?? "") ?? Infinity;
+    return rows.map((r, i) => ({ r, i, g: idx(r) }))
+      .sort((a, b) => a.g - b.g || a.i - b.i)
+      .map(x => x.r);
+  };
+  const visAdsets = groupByScope(applySort(filterData(scopedAdsets)));
+  const visAds = groupByScope(applySort(filterData(scopedAds)));
 
   if (!accountId) {
     return <GlobalCampaignsView />;
