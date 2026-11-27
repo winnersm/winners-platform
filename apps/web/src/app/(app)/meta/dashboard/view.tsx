@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { LayoutDashboard, RefreshCw, TrendingUp, CalendarDays, ChevronLeft, ChevronRight, ChevronDown, X, DollarSign, ArrowUpRight, ArrowDownRight, Percent, ShoppingCart, Target, Search, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { NotesButton, NotesPanel, useAccountNotes } from "@/components/account-notes";
 import { calcMetrics, fmtMoney, fmtInt, fmtPct, type Insights, type Metrics } from "@/lib/metrics";
 
 const DAYS_ES = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
@@ -189,8 +190,10 @@ function MobileMetric({ label, value, tone }: { label: string; value: string; to
 }
 
 /** Tarjeta de una cuenta publicitaria. Tocarla abre sus campañas, como la fila en desktop. */
-function AccountCard({ name, currency, m, status, removedAt, onOpen }: {
+function AccountCard({ name, currency, m, status, removedAt, onOpen, notes }: {
   name: string; currency: string; m: Metrics | null;
+  /** Botón de notas de la cuenta (con su contador). */
+  notes?: ReactNode;
   status: { label: string; tone: "red" | "amber" } | null;
   /** Solo en archivadas: cuándo salió del BM. */
   removedAt?: string | null;
@@ -209,6 +212,7 @@ function AccountCard({ name, currency, m, status, removedAt, onOpen }: {
             {removedAt !== undefined && <> · salió del BM {removedAt ? new Date(removedAt).toLocaleDateString("es") : "—"}</>}
           </p>
         </div>
+        {notes && <div className="-mt-0.5" onClick={(e) => e.stopPropagation()}>{notes}</div>}
         {status && (
           <span className={`mt-0.5 shrink-0 rounded px-1.5 py-[1px] text-[10px] font-semibold ${status.tone === "red" ? "bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-400" : "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400"}`}>
             {status.label}
@@ -271,6 +275,11 @@ export default function DashboardView() {
   const [hideZero, setHideZero] = useState(false);
   const [currencyFilter, setCurrencyFilter] = useState("ALL");
   const runId = useRef(0);
+  const accountNames = useMemo(
+    () => Object.fromEntries(accounts.map((a) => [a.id.replace("act_", ""), `${a.name} (${a.currency})`])),
+    [accounts],
+  );
+  const notes = useAccountNotes(accountNames);
 
   // Camino en VIVO (fallback): recorre cuentas y pega a Meta por cada una.
   const runLive = useCallback(async (my: number) => {
@@ -564,6 +573,7 @@ export default function DashboardView() {
             <AccountCard
               key={acc.id} name={acc.name} currency={acc.currency} m={m} status={st}
               removedAt={showArchived ? acc.removedFromBmAt ?? null : undefined}
+              notes={<NotesButton {...notes.countsFor(acc.id)} className="h-8 w-8" onClick={() => notes.openNotes(acc.id, `${acc.name} (${acc.currency})`)} />}
               onOpen={showArchived ? undefined : () => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}
             />
           );
@@ -592,7 +602,7 @@ export default function DashboardView() {
                 ? null
                 : ACCOUNT_STATUS[acc.account_status] ?? { label: `Estado ${acc.account_status}`, tone: "amber" as const };
               return (
-                <TableRow key={acc.id} className={`border-l-4 ${showArchived ? "" : "cursor-pointer"} ${profit > 0 ? "bg-green-50 border-l-green-400 hover:bg-green-100/60" : profit < 0 ? "bg-red-50 border-l-red-400 hover:bg-red-100/60" : "border-l-transparent hover:bg-muted/30"}`}
+                <TableRow key={acc.id} className={`group border-l-4 ${showArchived ? "" : "cursor-pointer"} ${profit > 0 ? "bg-green-50 border-l-green-400 hover:bg-green-100/60" : profit < 0 ? "bg-red-50 border-l-red-400 hover:bg-red-100/60" : "border-l-transparent hover:bg-muted/30"}`}
                   onClick={showArchived ? undefined : () => router.push(`/meta/campaigns?accountId=${rawId}&bmId=${acc.bmId}`)}>
                   <TableCell className="py-2">
                     <div className="flex items-center gap-1.5 min-w-0">
@@ -605,6 +615,7 @@ export default function DashboardView() {
                           {st.label}
                         </span>
                       )}
+                      <NotesButton {...notes.countsFor(acc.id)} onClick={() => notes.openNotes(acc.id, `${acc.name} (${acc.currency})`)} />
                     </div>
                   </TableCell>
                   <TableCell className="py-2 text-right text-xs tabular-nums">{fmtMoney(m?.spend ?? 0)}</TableCell>
@@ -622,6 +633,7 @@ export default function DashboardView() {
           </TableBody>
         </Table>
       </div>
+      <NotesPanel target={notes.open} me={notes.me} tick={notes.threadTick} onClose={notes.closeNotes} onChanged={notes.refreshSummary} />
     </div>
   );
 }
