@@ -22,13 +22,13 @@ function isRateLimit(e: unknown): boolean {
 }
 
 // ─── Errores estructurados ────────────────────────────────────────────────────
-type RawMetaError = {
+export type RawMetaError = {
   code?: number; error_subcode?: number; type?: string; message?: string;
   error_user_title?: string; error_user_msg?: string; fbtrace_id?: string; is_transient?: boolean;
 };
 
 /** Error crudo de Meta + contexto → detalle para el desarrollador (nunca incluye el token). */
-function toDetail(err: RawMetaError | undefined, ctx: { endpoint: string; httpStatus?: number; attempts?: number; retryAfterSec?: number }): MetaErrorDetail {
+export function toDetail(err: RawMetaError | undefined, ctx: { endpoint: string; httpStatus?: number; attempts?: number; retryAfterSec?: number }): MetaErrorDetail {
   return {
     code: err?.code, subcode: err?.error_subcode, type: err?.type, message: err?.message,
     userTitle: err?.error_user_title, userMsg: err?.error_user_msg, fbtraceId: err?.fbtrace_id,

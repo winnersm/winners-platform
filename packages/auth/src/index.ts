@@ -154,6 +154,8 @@ export const ROUTE_SCOPES: { path: string; module: Module; scope?: string }[] = 
   { path: "/meta/launches", module: "META", scope: "launches" },
   { path: "/meta/jobs", module: "META", scope: "jobs" },
   { path: "/meta/calls", module: "META", scope: "dashboard" },
+  // Analizar tokens de Meta: sección propia, como los tokens del clonador.
+  { path: "/meta/tokens", module: "META", scope: "tokens" },
   { path: "/automations", module: "AUTOMATIONS" },
   { path: "/links", module: "LINKS" },
   { path: "/monitor", module: "MONITOR" },
